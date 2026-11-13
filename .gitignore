@@ -1,0 +1,29 @@
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+frontend/dist/
+frontend/dev-dist/
+
+# Secrets
+.env
+
+# Data – Androids Corpus must NEVER be committed (non-commercial, no redistribution)
+data/
+*.db
+*.wav
+*.webm
+*.ogg
+*.mp3
+*.zip
+
+# Generated model weights (regenerate with ml/train_weights.py)
+backend/app/engine/weights.json

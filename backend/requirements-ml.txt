@@ -1,0 +1,12 @@
+# Installed Saturday – heavy signal/ML deps
+-r requirements.txt
+praat-parselmouth
+opensmile
+numpy
+scipy
+scikit-learn
+pandas
+torch
+transformers
+librosa
+google-genai
