@@ -97,5 +97,5 @@
   "n_depressed": 62,
   "trained_on": "androids_interview",
   "folds": "corpus fold-lists.csv (100% of speakers)",
-  "trained_at": "2026-11-14T08:45:04+00:00"
+  "trained_at": "2026-11-14T09:04:02+00:00"
 }
