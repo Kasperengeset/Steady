@@ -7,3 +7,4 @@ numpy>=1.26
 vaderSentiment>=3.3   # text branch (pipeline/text.py)
 pywebpush>=2.0   # Web Push for the daily prompt (app/push.py, P2)
 google-genai>=3.3   # Gemini transcription (pipeline/llm.py, scripts/check_gemini.py)
+google-auth-oauthlib>=1.2   # read-only Google Health connection

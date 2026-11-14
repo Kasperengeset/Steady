@@ -1,21 +1,23 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   plugins: [
     react(),
+    tailwindcss(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg'],
-      // Web Push for the daily prompt (#22): push + notificationclick handlers live in public/push-sw.js
-      workbox: { importScripts: ['push-sw.js'] },
+      devOptions: { enabled: true, type: 'classic', navigateFallback: 'index.html' },
+      workbox: { importScripts: ['/push-sw.js'], navigateFallbackDenylist: [/^\/api\//] },
       manifest: {
-        name: 'Beyond the Clinic',
-        short_name: 'Beyond',
-        description: 'Daily voice check-in for maintenance after TMS treatment',
-        theme_color: '#2f6f62',
-        background_color: '#f4efe6',
+        name: 'Steady',
+        short_name: 'Steady',
+        description: 'Staying well at home after TMS treatment',
+        theme_color: '#43654f',
+        background_color: '#f9faf6',
         display: 'standalone',
         icons: [{ src: 'icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' }],
       },
@@ -23,6 +25,6 @@ export default defineConfig({
   ],
   server: {
     host: true,
-    proxy: { '/api': 'http://localhost:8000' },
+    proxy: { '/api': loadEnv(mode, '.', 'STEADY_').STEADY_API_TARGET || 'http://127.0.0.1:8000' },
   },
-})
+}))

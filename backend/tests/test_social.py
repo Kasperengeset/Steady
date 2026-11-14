@@ -7,8 +7,28 @@ from sqlmodel import Session, select
 from app import db
 from app.engine import state
 from app.models import Escalation, Patient
+from app.models_appie import AppiePet
+from app.models_rewards import RewardLedger
 
 from .engagement_utils import ENTRIES, checkin_on_days, client, diary  # noqa: F401
+
+
+def test_appie_name_and_unlocked_look_respect_individual_sharing(client):
+    now = client.now()
+    with Session(db.engine) as session:
+        session.add(AppiePet(patient_id=1, name="Captain Appie"))
+        session.add(RewardLedger(patient_id=1, ts=now, date=now.date(), reason="test", amount=550, key="test:avatar"))
+        session.commit()
+    assert client.put("/api/patients/1/profile", json={"social_consent": True, "share_avatar": True, "share_level": True}).status_code == 200
+    circle = client.post("/api/patients/1/circle", json={"name": "Test"}).json()
+    feed = client.get("/api/circles/feed", params={"token": circle["token"]}).json()
+    card = next(member for member in feed["members"] if member["is_you"])
+    assert card["avatar"]["name"] == "Captain Appie" and card["avatar"]["tier"] == 2
+    assert card["level"] == 4
+    assert "xp" not in card["avatar"] and "food" not in card["avatar"]
+    assert client.put("/api/patients/1/profile", json={"share_avatar": False, "share_level": False}).status_code == 200
+    hidden = client.get("/api/circles/feed", params={"token": circle["token"]}).json()["members"][0]
+    assert hidden["avatar"] is None and hidden["level"] is None
 
 # Anything health-related that must never appear in a circle response (as a key or as a value)
 HEALTH_KEYS = {

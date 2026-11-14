@@ -1,0 +1,130 @@
+{
+  "branch": "health",
+  "weights": {
+    "steps": 0.1429,
+    "inactive_share": 0.1429,
+    "night_activity": 0.0,
+    "relative_amplitude": 0.0,
+    "m10_onset": 0.1429,
+    "sleep_hours": 0.1429,
+    "sleep_midpoint": 0.1429,
+    "resting_hr": 0.1429,
+    "hrv_rmssd": 0.1429
+  },
+  "zero_weight": {
+    "night_activity": "within-person d -0.00: no signal or against the literature on Depresjon",
+    "relative_amplitude": "within-person d +0.23: no signal or against the literature on Depresjon"
+  },
+  "direction": {
+    "steps": -1,
+    "inactive_share": 1,
+    "night_activity": 1,
+    "relative_amplitude": -1,
+    "m10_onset": 1,
+    "sleep_hours": -1,
+    "sleep_midpoint": 1,
+    "resting_hr": 1,
+    "hrv_rmssd": -1
+  },
+  "within_corr": {
+    "features": [
+      "steps",
+      "inactive_share",
+      "night_activity",
+      "relative_amplitude",
+      "m10_onset"
+    ],
+    "matrix": [
+      [
+        1.0,
+        -0.4969,
+        0.3468,
+        0.4549,
+        0.4137
+      ],
+      [
+        -0.4969,
+        1.0,
+        -0.2433,
+        -0.1408,
+        -0.3013
+      ],
+      [
+        0.3468,
+        -0.2433,
+        1.0,
+        0.1203,
+        0.1083
+      ],
+      [
+        0.4549,
+        -0.1408,
+        0.1203,
+        1.0,
+        0.5065
+      ],
+      [
+        0.4137,
+        -0.3013,
+        0.1083,
+        0.5065,
+        1.0
+      ]
+    ]
+  },
+  "beta_standardised": {
+    "steps": -0.7008,
+    "inactive_share": -0.0797,
+    "night_activity": 0.1233,
+    "relative_amplitude": 0.4432,
+    "m10_onset": 0.5937
+  },
+  "literature_disagreements": [
+    "inactive_share",
+    "relative_amplitude"
+  ],
+  "within_person_d": {
+    "steps": -0.399,
+    "inactive_share": 0.263,
+    "night_activity": -0.004,
+    "relative_amplitude": 0.226,
+    "m10_onset": 0.454
+  },
+  "validation": {
+    "logistic regression": {
+      "f1": 0.706,
+      "mcc": 0.464,
+      "auc": 0.818,
+      "n": 55.0,
+      "n_depressed": 23.0
+    },
+    "random forest": {
+      "f1": 0.711,
+      "mcc": 0.512,
+      "auc": 0.812,
+      "n": 55.0,
+      "n_depressed": 23.0
+    },
+    "logistic regression, unipolar only": {
+      "f1": 0.765,
+      "mcc": 0.645,
+      "auc": 0.898,
+      "n": 47.0,
+      "n_depressed": 15.0
+    },
+    "gender + age only (leakage check)": {
+      "f1": 0.519,
+      "mcc": 0.077,
+      "auc": 0.602,
+      "n": 55.0,
+      "n_depressed": 23.0
+    }
+  },
+  "published_baseline": {
+    "f1": 0.73,
+    "mcc": 0.44
+  },
+  "data": "Depresjon (Garcia-Ceja et al. 2018), Actiwatch counts per minute, full days only",
+  "note": "Equal weights and literature directions (B12), except zero_weight features. within_corr covers the 5 activity features; sleep and heart features come from the wearable's own summaries, have no training data here and are treated as independent. No feature_stats: Actiwatch counts and Fitbit steps differ in scale, so the personal baseline sets the scale.",
+  "trained_on": "2026-11-14"
+}

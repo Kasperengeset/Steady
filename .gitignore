@@ -6,10 +6,13 @@
 # Python
 .venv/
 __pycache__/
+.pytest_cache/
 *.pyc
 
 # Node
 node_modules/
+.runs/
+.qa/
 frontend/dist/
 frontend/dev-dist/
 

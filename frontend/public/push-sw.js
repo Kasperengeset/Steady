@@ -1,36 +1,29 @@
-/* Web Push for the daily prompt (#22, P2). Imported into the generated service worker
-   (vite.config.ts → workbox.importScripts). The payload is fixed text from backend/app/push.py –
-   never health data, because it shows on a lock screen. */
+/* Canonical prompt delivery: lock-screen text contains no health or diary data. */
 self.addEventListener('push', (event) => {
-  let data = { title: 'Time for your check-in', body: 'Read the phrase, then tell me about your day.', url: '/', tag: 'daily-prompt' }
+  let payload = {}
+  try { payload = event.data?.json() || {} } catch { /* fixed safe defaults */ }
+  const title = typeof payload.title === 'string' ? payload.title : 'Time for your check-in'
+  let url = new URL('/checkin', self.location.origin)
   try {
-    if (event.data) data = { ...data, ...event.data.json() }
-  } catch (e) {
-    /* keep the default text */
-  }
-  event.waitUntil(
-    self.registration.showNotification(data.title, {
-      body: data.body,
-      tag: data.tag,
-      icon: '/icon.svg',
-      badge: '/icon.svg',
-      data: { url: data.url || '/' },
-    }),
-  )
+    url = new URL(payload.tag === 'daily-prompt' && payload.url === '/' ? '/checkin' :
+      typeof payload.url === 'string' ? payload.url : '/checkin', self.location.origin)
+  } catch { /* malformed data keeps the local check-in destination */ }
+  event.waitUntil(self.registration.showNotification(title, {
+    body: typeof payload.body === 'string' ? payload.body : 'A little moment for you and Appie.',
+    icon: '/icon.svg', badge: '/icon.svg',
+    tag: typeof payload.tag === 'string' ? payload.tag : 'daily-prompt',
+    data: { url: url.origin === self.location.origin ? url.href : self.location.origin + '/checkin' },
+  }))
 })
-
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const url = (event.notification.data && event.notification.data.url) || '/'
-  event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
-      for (const w of wins) {
-        if ('focus' in w) {
-          w.navigate(url)
-          return w.focus()
-        }
-      }
-      return self.clients.openWindow(url)
-    }),
-  )
+  let url
+  try { url = new URL(event.notification.data?.url || '/checkin', self.location.origin) }
+  catch { url = new URL('/checkin', self.location.origin) }
+  if (url.origin !== self.location.origin) return
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (clients) => {
+    const existing = clients.find((client) => new URL(client.url).origin === self.location.origin)
+    if (existing) { await existing.navigate(url.href); return existing.focus() }
+    return self.clients.openWindow(url.href)
+  }))
 })

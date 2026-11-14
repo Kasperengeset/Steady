@@ -1,29 +1,48 @@
-import { BrowserRouter, NavLink, Route, Routes } from 'react-router-dom'
-import PatientView from './views/PatientView'
-import ClinicianView from './views/ClinicianView'
-import FriendView from './views/FriendView'
-import { CirclePage, FriendCirclePage, HabitsPage } from './features/engagement'
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import Shell from './patient/Shell'
+import Today from './patient/Today'
+import CheckIn from './patient/CheckIn'
+import FollowUp from './patient/FollowUp'
+import { ActionDetail, Insights } from './patient/Insights'
+import Friends from './patient/Friends'
+import Companion from './patient/Companion'
+import Habits from './patient/Habits'
+import Circle, { FriendCircle } from './patient/Circle'
+import Portal from './clinician/Portal'
+import Notifications from './clinician/Notifications'
+import Patients from './clinician/Patients'
+import PatientDetail from './clinician/PatientDetail'
+import ModelRegistry from './clinician/ModelEvidence'
+import FriendNudge from './friend/FriendNudge'
+import FriendCirclePage from './features/engagement/FriendCirclePage'
 
+// Patient app (mobile): /  ·  Clinician portal (desktop): /clinician  ·  A friend's view: /friend/1
 export default function App() {
   return (
     <BrowserRouter>
-      <main>
-        <Routes>
-          <Route path="/" element={<PatientView />} />
-          <Route path="/clinician" element={<ClinicianView />} />
-          <Route path="/friends" element={<FriendView />} />
-          <Route path="/habits" element={<HabitsPage />} />
-          <Route path="/circle" element={<CirclePage />} />
-          <Route path="/circle/friend" element={<FriendCirclePage />} />
-        </Routes>
-      </main>
-      <nav className="tabs">
-        <NavLink to="/" end>Patient</NavLink>
-        <NavLink to="/clinician">Clinician</NavLink>
-        <NavLink to="/friends">Friends</NavLink>
-        <NavLink to="/habits">Habits</NavLink>
-        <NavLink to="/circle">Circle</NavLink>
-      </nav>
+      <Routes>
+        <Route element={<Shell />}>
+          <Route index element={<Today />} />
+          <Route path="checkin" element={<CheckIn />} />
+          <Route path="followup" element={<FollowUp />} />
+          <Route path="insights" element={<Insights />} />
+          <Route path="insights/:key" element={<ActionDetail />} />
+          <Route path="friends" element={<Friends />} />
+          <Route path="appie" element={<Companion />} />
+          <Route path="habits" element={<Habits />} />
+          <Route path="circle" element={<Circle />} />
+        </Route>
+        <Route path="clinician" element={<Portal />}>
+          <Route index element={<Patients />} />
+          <Route path="patients" element={<Patients />} />
+          <Route path="patients/:id" element={<PatientDetail />} />
+          <Route path="notifications" element={<Notifications />} />
+          <Route path="models" element={<ModelRegistry />} />
+        </Route>
+        <Route path="friend/:pid" element={<FriendNudge />} />
+        <Route path="join" element={<FriendCircle />} />
+        <Route path="circle/friend" element={<FriendCirclePage />} />
+      </Routes>
     </BrowserRouter>
   )
 }

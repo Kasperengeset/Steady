@@ -16,6 +16,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone, tzinfo
 
 from sqlmodel import Session, col, select
+from sqlalchemy import update
 
 from .db import engine
 from .models import Arm, CheckIn, Feature, FeatureSource, InterventionLog, Patient
@@ -119,16 +120,29 @@ def _spoken_ids(s: Session, ids: list[int]) -> set[int]:
     if not ids:
         return set()
     return set(s.exec(
-        select(Feature.checkin_id).where(col(Feature.checkin_id).in_(ids), Feature.source == FeatureSource.prosody)
+        select(Feature.checkin_id).where(col(Feature.checkin_id).in_(ids), Feature.source == FeatureSource.prosody,
+                                        ~col(Feature.name).startswith("phrase_", autoescape=True))
     ).all())
 
 
 def checkin_history(s: Session, patient_id: int, tz: tzinfo) -> list[dict]:
     """Each check-in as {id, ts, day, spoken, speech_s, n_words, length_s, qualifies}. Content is not kept."""
     rows = s.exec(select(CheckIn).where(CheckIn.patient_id == patient_id).order_by(col(CheckIn.ts))).all()
+    # Wearable-only observations and the fixed reading phrase are not daily memos.
+    # This history also drives social presence and companion messages, so a sync
+    # must not make a person appear to have checked in or reset the missing-day gap.
+    memo_ids = set(s.exec(select(Feature.checkin_id).where(
+        col(Feature.checkin_id).in_([c.id for c in rows]),
+        col(Feature.source).in_((FeatureSource.prosody, FeatureSource.text)),
+        ~col(Feature.name).startswith("phrase_", autoescape=True),
+    )).all()) if rows else set()
+    feature_ids = set(s.exec(select(Feature.checkin_id).where(col(Feature.checkin_id).in_([c.id for c in rows]))).all()) if rows else set()
     spoken = _spoken_ids(s, [c.id for c in rows])
     out = []
     for c in rows:
+        legacy_memo = c.id not in feature_ids and (bool((c.transcript or "").strip()) or c.speech_s is not None)
+        if c.id not in memo_ids and not legacy_memo:
+            continue
         speech_s = getattr(c, "speech_s", None)  # set by the check-in flow once #21/#22 is merged
         is_spoken = c.id in spoken or speech_s is not None
         n_words = len((c.transcript or "").split())
@@ -166,6 +180,9 @@ def _on_time_checkins(s: Session, patient_id: int) -> set[int]:
 
 def sync(s: Session, patient_id: int, now: datetime) -> list[RewardLedger]:
     """Pay every reward that is due and not yet paid. Returns the new rows (not committed)."""
+    # The unique ledger key prevents duplicate payment; serialize before reading
+    # keys so concurrent app/social/reward refreshes also return successfully.
+    s.execute(update(Patient).where(Patient.id == patient_id).values(name=Patient.name))
     tz = patient_tz(s, patient_id, now)
     have = set(s.exec(select(RewardLedger.key).where(
         RewardLedger.patient_id == patient_id, col(RewardLedger.key).is_not(None)
