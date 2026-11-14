@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .db import init_db
-from .routers import baselines, checkins, friends, interventions, patients, sim
+from .routers import baselines, checkins, friends, interventions, patients, prompts, sim
 from .seed import seed
 
 
@@ -31,7 +31,8 @@ app.add_middleware(
     CORSMiddleware, allow_origins=settings.cors_origins, allow_methods=["*"], allow_headers=["*"]
 )
 
-for r in (checkins.router, interventions.router, patients.router, baselines.router, friends.router, sim.router):
+for r in (checkins.router, interventions.router, patients.router, baselines.router, friends.router, sim.router,
+          prompts.router):
     app.include_router(r, prefix="/api")
 
 
