@@ -114,13 +114,14 @@ def history_stats(
     return out
 
 
-def zscores(today: dict[str, float], stats: dict[str, tuple[float, float, int]], direction: dict[str, int]) -> dict[str, float]:
-    """Direction-adjusted z-scores of today's values against a baseline (positive = worse)."""
-    return {
-        f: direction.get(f, 1) * (x - stats[f][0]) / stats[f][1]
-        for f, x in today.items()
-        if f in stats
-    }
+def zscores(
+    today: dict[str, float], stats: dict[str, tuple[float, float, int]], direction: dict[str, int],
+    cap: float | None = None,
+) -> dict[str, float]:
+    """Direction-adjusted z-scores of today's values against a baseline (positive = worse).
+    `cap` (a branch's "z_cap" in its weights file, B34) limits how far one check-in can move a feature."""
+    z = {f: direction.get(f, 1) * (x - stats[f][0]) / stats[f][1] for f, x in today.items() if f in stats}
+    return {f: max(-cap, min(cap, v)) for f, v in z.items()} if cap else z
 
 
 def _corr(model: BranchModel, a: str, b: str) -> float:

@@ -98,7 +98,7 @@ def _score_tracks(
         }
         for track, stats in tracks.items():
             used_stats[track][branch] = stats
-            z = state.zscores(vals, stats, model.direction)
+            z = state.zscores(vals, stats, model.direction, model.meta.get("z_cap"))
             if z:
                 Z[track][branch] = z
                 shares[track][branch] = state.feature_shares(z, model)

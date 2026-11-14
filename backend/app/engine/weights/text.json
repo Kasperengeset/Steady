@@ -29,5 +29,21 @@
     "first_person"
   ],
   "note": "Lexicon features add no accuracy over v1 on Reddit (v1 already uses those words), so text_logit carries almost all weight. They stay in the output to explain the score. Gemini content features (mood, energy_self, anhedonia, social_contact) get weight 0 until the real Gemini call replaces the stub.",
-  "trained_on": "2026-11-14"
+  "trained_on": "2026-11-14",
+  "feature_stats": {
+    "text_logit": {
+      "within_sd": 1.3127
+    },
+    "absolutist": {
+      "within_sd": 1.218
+    },
+    "first_person": {
+      "within_sd": 7.4863
+    },
+    "sentiment": {
+      "within_sd": 0.2894
+    }
+  },
+  "z_cap": 3.0,
+  "feature_stats_source": "pooled within-author SD of good-day diaries in ml/text/diary_bank.csv (team-written, 3 authors) \u2013 prior for robust_stats, STATUS.md B34"
 }
