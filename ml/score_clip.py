@@ -54,6 +54,9 @@ def main() -> None:
 
     for arg in sys.argv[1:]:
         path = Path(arg).expanduser()
+        if not path.is_file():
+            print(f"\n{path}: file not found – drag the audio file into the terminal to paste its exact path")
+            continue
         x = audio.load(str(to_wav(path)))
         feats = prosody.from_full(prosody.extract_full_signal(x))
         feats.update(emotion.run_signal(x)[1])

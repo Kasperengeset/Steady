@@ -19,7 +19,7 @@ PWA (React) ──audio──▶ FastAPI
           Thompson-sampling bandit ─▶ escalation ladder
 ```
 
-Raw audio is deleted right after feature extraction. Full plan: [`docs/plan.md`](docs/plan.md).
+Raw audio is deleted right after feature extraction. Full plan: [`docs/plan.md`](docs/plan.md). **Current status, model results and decisions: [`STATUS.md`](STATUS.md).**
 
 ## Run locally
 
