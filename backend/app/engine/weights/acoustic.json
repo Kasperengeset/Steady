@@ -1,0 +1,57 @@
+{
+  "branch": "acoustic",
+  "weights": {
+    "speech_rate": 0.0673,
+    "f0_std": 0.06,
+    "pause_ratio": 0.0844,
+    "energy": 0.1747,
+    "jitter": 0.128,
+    "shimmer": 0.0669,
+    "arousal": 0.2043,
+    "valence": 0.2143
+  },
+  "direction": {
+    "speech_rate": -1,
+    "f0_std": -1,
+    "pause_ratio": 1,
+    "energy": -1,
+    "jitter": 1,
+    "shimmer": 1,
+    "arousal": -1,
+    "valence": -1
+  },
+  "beta_standardised": {
+    "speech_rate": -0.0068,
+    "f0_std": -0.0061,
+    "pause_ratio": 0.0086,
+    "energy": -0.0177,
+    "jitter": 0.013,
+    "shimmer": 0.0068,
+    "arousal": -0.0207,
+    "valence": -0.0218
+  },
+  "C": 0.001,
+  "auc": {
+    "mean": 0.762,
+    "std": 0.073,
+    "per_fold": [
+      0.659,
+      0.792,
+      0.723,
+      0.878,
+      0.758
+    ],
+    "pooled": 0.722
+  },
+  "auc_reference": {
+    "egemaps88": 0.857,
+    "demographics": 0.475,
+    "wav2vec2_probe": 0.897
+  },
+  "literature_disagreements": [],
+  "n_speakers": 114,
+  "n_depressed": 62,
+  "trained_on": "androids_interview",
+  "folds": "corpus fold-lists.csv (100% of speakers)",
+  "trained_at": "2026-11-14T08:08:15+00:00"
+}

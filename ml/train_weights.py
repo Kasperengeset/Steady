@@ -68,17 +68,17 @@ def speaker_table(clips: pd.DataFrame) -> pd.DataFrame:
     return pd.concat([meta, agg], axis=1).reset_index()
 
 
-def assign_folds(spk: pd.DataFrame, n: int = 5) -> tuple[np.ndarray, str]:
+def assign_folds(spk: pd.DataFrame, task: str, n: int = 5) -> tuple[np.ndarray, str]:
     try:
         from corpus import load_folds
 
-        folds = load_folds()
+        folds = load_folds(task)
     except SystemExit:
         folds = {}
     coverage = spk["speaker"].map(folds).notna().mean() if folds else 0.0
     if coverage >= 0.9:
         f = spk["speaker"].map(folds).fillna(-1).astype(int).to_numpy()
-        return f, f"fold-list.csv ({coverage:.0%} of speakers)"
+        return f, f"corpus fold-lists.csv ({coverage:.0%} of speakers)"
     sgkf = StratifiedGroupKFold(n_splits=n, shuffle=True, random_state=0)
     f = np.full(len(spk), -1)
     for k, (_, test) in enumerate(sgkf.split(spk, spk["label"], groups=spk["speaker"])):
@@ -130,7 +130,7 @@ def main() -> None:
     spk = speaker_table(clips)
     feats = [f for f in APP_FEATURES if f"app_{f}" in spk]
     y = spk["label"].to_numpy()
-    folds, fold_src = assign_folds(spk)
+    folds, fold_src = assign_folds(spk, args.task)
     print(f"{len(clips)} clips → {len(spk)} speakers ({y.sum()} depressed / {len(y) - y.sum()} controls); folds: {fold_src}")
 
     X_app = spk[[f"app_{f}" for f in feats]].to_numpy()

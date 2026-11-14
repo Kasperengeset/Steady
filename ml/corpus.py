@@ -50,28 +50,32 @@ def list_files(task: str) -> list[Path]:
     return sorted((base / sub).rglob("*.wav"))
 
 
-def load_folds() -> dict[str, int]:
-    """speaker -> fold (0-based) from fold-list.csv. Parsed defensively: any cell that contains a
-    speaker-style name is assigned the fold of its column (wide format) or of a 'fold' column (long)."""
-    path = corpus_dir() / "fold-list.csv"
-    if not path.exists():
+def load_folds(task: str) -> dict[str, int]:
+    """speaker -> fold (0-based) from fold-lists.csv.
+
+    Real layout: row 0 = block titles ("Read" … "Interview"), row 1 = fold1..fold5 per block,
+    then one speaker id per cell (e.g. '01_CF56_1'). The fold is the column's position in its block.
+    """
+    base = corpus_dir()
+    path = next((p for p in (base / "fold-lists.csv", base / "fold-list.csv") if p.exists()), None)
+    if path is None:
         return {}
     with path.open(newline="", encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
-    if not rows:
+    if len(rows) < 3:
         return {}
-    header = [h.strip().lower() for h in rows[0]]
+    want = {"interview": "interview", "reading": "read"}[task]
+    titles, fold_names = rows[0], rows[1]
+    block, cols = None, []
+    for j, name in enumerate(fold_names):
+        if j < len(titles) and titles[j].strip():
+            block = titles[j].strip().lower()
+        if block == want and name.strip().lower().startswith("fold"):
+            cols.append(j)
     folds: dict[str, int] = {}
-    fold_col = next((i for i, h in enumerate(header) if "fold" in h and len(header) <= 3), None)
-    for row in rows[1:] if any(not _NAME.search(h) for h in header) else rows:
-        for j, cell in enumerate(row):
-            m = _NAME.search(cell)
-            if not m or m["X"] == "X":
-                continue
-            spk = f"{int(m['nn']):02d}_{m['X']}"
-            if fold_col is not None and fold_col != j:
-                digits = re.findall(r"\d+", row[fold_col])
-                folds[spk] = int(digits[0]) - 1 if digits else 0
-            else:
-                folds[spk] = j
+    for row in rows[2:]:
+        for k, j in enumerate(cols):
+            m = _NAME.search(row[j]) if j < len(row) else None
+            if m and m["X"] != "X":
+                folds[f"{int(m['nn']):02d}_{m['X']}"] = k
     return folds
