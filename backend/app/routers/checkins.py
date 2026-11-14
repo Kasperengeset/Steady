@@ -252,7 +252,7 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
     level = escalation.evaluate_level(recent[-7:], result.crisis)
     if level > 0 and level != patient.risk_level:
         recipient = ContactKind.friend if level == 1 else ContactKind.clinician
-        s.add(Escalation(patient_id=patient_id, level=level, recipient=recipient,
+        s.add(Escalation(patient_id=patient_id, level=level, recipient=recipient, ts=now,
                          reason="crisis flag" if result.crisis else f"S={S_val} ({driver})"))
     patient.risk_level = level
     s.add(patient)

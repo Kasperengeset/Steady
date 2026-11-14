@@ -270,3 +270,22 @@ def test_mixed_baseline_without_enough_values_per_feature_keeps_building(client)
     assert out["baseline"]["status"] == "active"
     stats = client.get("/api/patients/1/baseline").json()["stats"]["all"]
     assert "speech_rate" in stats and "text_logit" not in stats
+
+
+def test_escalation_uses_the_shared_clock(client):
+    """Escalations are dated by baseline.clock() like check-ins, not by the wall clock (seed_demo, tests)."""
+    from sqlmodel import Session, select
+
+    from app.models import Escalation
+
+    rng = random.Random(9)
+    client.post("/api/patients/1/baseline/start", json={"period_days": 0, "min_checkins": 6})
+    for _ in range(6):
+        checkin(client, features(0, rng))
+    for _ in range(4):
+        out = checkin(client, features(2.5, rng))
+    assert out["state"]["level"] >= 2
+    with Session(db.engine) as s:
+        esc = s.exec(select(Escalation)).all()
+    assert esc and all(e.ts.date() == baseline_mod.clock().date() or e.ts.date() < baseline_mod.clock().date() for e in esc)
+    assert max(e.ts for e in esc).date() > datetime.now(timezone.utc).date()  # clock was advanced beyond today
