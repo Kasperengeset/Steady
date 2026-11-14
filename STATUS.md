@@ -235,6 +235,8 @@ En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
 
 ## 5. Åpne oppgaver
 
+*T-nummer = oppgave her. B-nummer = beslutning i seksjon 4.*
+
 - [ ] **T1 (høyest prioritet)** Fast «frisk baseline» i tillegg til den glidende (`engine/state.py`, `routers/checkins.py`). Simulatoren viser 21/50 bom uten den, 0/50 med.
 - [ ] **T2** Ved talt innsjekk skal plassholderen for Gemini **ikke** legge tilfeldige tekst-trekk inn i scoren, bare transkripsjon og krise-flagg (`pipeline/__init__.py`)
 - [ ] **T3** Tekst-grenen: trene på teamets tekstdatasett → `weights/text.json`
@@ -243,7 +245,7 @@ En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
 - [ ] **T6** Vurder lavere vekt på `energy` på grunn av mikrofonavhengighet
 - [ ] **T7** Kjør leseoppgaven som ekstra kontroll (`--task reading --no-write`)
 - [ ] **T8** Belønningen til banditen: «ble tilstanden bedre?» (`S_{t+1} < S_t`) er ikke koblet inn (`routers/interventions.py`)
-- [ ] **T9** Test med Kaspers egne opptak (`ml/score_clip.py`)
+- [x] **T9** Test med egne opptak: 8 klipp fra Kasper og Mahdan (se «Røyktest på egne opptak»)
 - [ ] **T10** Baseline: høyere minimum (~5–7 innsjekker før z-score) og egen baseline for morgen og kveld (`state.zscores`, `_baseline_history`)
 - [x] Simulator med den ekte motoren (`sim/simulator.py`, `/api/sim/run`, `/api/sim/robustness`)
 - [ ] **T11** Demo-visning i frontend: slider over dagene, S (glidende vs. fast) mot selvrapport, og hva banditen har lært (typer finnes i `frontend/src/lib/api.ts`)
