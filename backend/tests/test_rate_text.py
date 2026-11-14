@@ -73,3 +73,24 @@ def test_weight_zero_content_scores_leave_D_text_unchanged():
     z = {"text_logit": 1.2, "sentiment": -0.4, "first_person": 0.3, "absolutist": 0.1}
     with_llm = {**z, "mood": 2.5, "energy_self": -1.0, "anhedonia": 3.0, "social_contact": 0.7}
     assert state.branch_deviation(with_llm, model) == pytest.approx(state.branch_deviation(z, model))
+
+
+def test_diary_gets_content_scores_and_evidence(fake):
+    from app.models import FeatureSource
+    from app.pipeline import extract_text_features
+
+    fake(reply=json.dumps(GOOD))
+    res = extract_text_features("I am not sad today. Had lunch with Anna and biked to work.")
+    llm_feats = {n: v for n, v, src in res.features if src == FeatureSource.llm}
+    assert llm_feats == {"mood": 7.0, "energy_self": 6.0, "anhedonia": 2.0, "social_contact": 8.0}
+    assert json.loads(res.llm_json)["content"]["evidence"]["social_contact"] == "lunch with Anna"
+    assert {n for n, _, src in res.features if src == FeatureSource.text} >= {"text_logit", "sentiment"}
+
+
+def test_diary_without_rating_has_no_content_scores(fake):
+    from app.models import FeatureSource
+    from app.pipeline import extract_text_features
+
+    fake(reply="not json")
+    res = extract_text_features("A quiet day.")
+    assert not [n for n, _, src in res.features if src == FeatureSource.llm] and res.llm_json is None

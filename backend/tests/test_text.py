@@ -131,7 +131,8 @@ def test_retries_when_model_overloaded(monkeypatch, tmp_path, no_audio_models):
     monkeypatch.setattr(pipeline.llm.time, "sleep", lambda s: None)
     fake = FlakyGemini()
     res = spoken(monkeypatch, tmp_path, fake)
-    assert len(fake.calls) == 2 and res.transcript == ENTRIES["good_1"]
+    transcribe_calls = [c for c in fake.calls if c["model"] == pipeline.llm.settings.transcribe_model]
+    assert len(transcribe_calls) == 2 and res.transcript == ENTRIES["good_1"]  # (+1 content-rating call, #28)
 
 
 def test_does_not_retry_spend_cap(monkeypatch, tmp_path, no_audio_models):
