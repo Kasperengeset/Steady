@@ -36,3 +36,4 @@ class DailyPrompt(SQLModel, table=True):
     answered_at: datetime | None = None  # UTC; a late answer still counts fully, just no on-time bonus
     checkin_id: int | None = Field(default=None, foreign_key="checkin.id")
     source: str = "random"  # "random" | "demo" ("Send today's prompt now")
+    pushed_at: datetime | None = None  # Web Push sent (P2, app/push.py); once per prompt

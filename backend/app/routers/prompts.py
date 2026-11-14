@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
-from .. import baseline, prompt
+from .. import baseline, prompt, push
 from ..db import get_session
 from ..models import Patient
 from ..schemas_prompt import PromptOut, PromptSettingsIn
@@ -55,6 +55,7 @@ def send_prompt_now(pid: int, s: Session = Depends(get_session)) -> dict:
 
     def run() -> dict:
         prompt.send_now(s, pid, now)
+        push.deliver_due(s, now, patient_id=pid)  # no-op without VAPID keys
         return prompt.status(s, pid, now)
 
     return _retry(s, run)
