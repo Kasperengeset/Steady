@@ -1,29 +1,23 @@
 import { useState } from 'react'
-import { api, todayUTC, type CheckInResponse, type Slot } from '../lib/api'
-import { useRecorder } from '../hooks/useRecorder'
+import { api, todayUTC, type Slot } from '../lib/api'
+import type { DailyCheckInResponse } from '../lib/api_checkin'
+import DailyCheckIn from '../features/checkin/DailyCheckIn'
+import PromptBanner from '../features/checkin/PromptBanner'
+import PromptSettings from '../features/checkin/PromptSettings'
+import { usePrompt } from '../features/checkin/usePrompt'
 
 const PATIENT_ID = 1 // TODO: login is last on the cut list – demo patient for now
 
 export default function PatientView() {
   const [slot, setSlot] = useState<Slot>(new Date().getHours() < 14 ? 'morning' : 'evening')
-  const [result, setResult] = useState<CheckInResponse | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [result, setResult] = useState<DailyCheckInResponse | null>(null)
   const [feedbackSent, setFeedbackSent] = useState<number | null>(null)
-  const rec = useRecorder()
+  const [startSignal, setStartSignal] = useState(0)
+  const prompt = usePrompt(PATIENT_ID)
 
-  async function onRecord() {
-    if (rec.recording) return rec.stop()
-    setError(null)
-    try {
-      const audio = await rec.start()
-      setBusy(true)
-      setResult(await api.checkIn(PATIENT_ID, slot, audio))
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
+  function onResult(r: DailyCheckInResponse) {
+    setResult(r)
+    void prompt.refresh()
   }
 
   async function sendFeedback(completed: boolean, rating: number | null) {
@@ -31,10 +25,10 @@ export default function PatientView() {
     setFeedbackSent(r.reward)
   }
 
-  const secs = Math.ceil((rec.maxMs - rec.elapsed) / 1000)
-
   return (
     <section className="view patient">
+      <PromptBanner status={prompt.status} secondsLeft={prompt.secondsLeft} onStart={() => setStartSignal((n) => n + 1)} />
+
       <div className="segmented" role="tablist">
         {(['morning', 'evening'] as const).map((s) => (
           <button key={s} role="tab" aria-selected={slot === s} onClick={() => setSlot(s)}>
@@ -43,21 +37,11 @@ export default function PatientView() {
         ))}
       </div>
 
-      <p className="prompt">
-        {slot === 'morning' ? 'How did you sleep, and how does the day feel?' : 'How has your day been?'}
-      </p>
+      <DailyCheckIn patientId={PATIENT_ID} slot={slot} startSignal={startSignal} onResult={onResult} />
 
-      <button
-        className={`record ${rec.recording ? 'on' : ''}`}
-        onClick={onRecord}
-        disabled={busy}
-        aria-label={rec.recording ? 'Stopp opptak' : 'Start opptak'}
-      >
-        {busy ? '…' : rec.recording ? `${secs}s` : 'Speak'}
-      </button>
-      <p className="hint">{rec.recording ? 'Tap again to stop' : 'About 20 seconds'}</p>
-
-      {(error || rec.error) && <p className="error">{error || rec.error}</p>}
+      {result?.prompt && (
+        <p className="muted">{result.prompt.on_time ? 'Thanks for checking in on time.' : 'Thanks for checking in. It counts fully.'}</p>
+      )}
 
       {result?.crisis && (
         <div className="card crisis">
@@ -113,6 +97,11 @@ export default function PatientView() {
             {result.state.driver && ` · driven by ${result.state.driver === 'anchored' ? 'healthy baseline' : 'last 14 days'}`}</p>
           <p>Healthy baseline: {result.state.S_anchored?.toFixed(2) ?? '—'} · Last 14 days: {result.state.S_rolling?.toFixed(2) ?? '—'}</p>
           {result.state.explanation && <p>{result.state.explanation.sentence}</p>}
+          {result.phrase && (
+            <p>Phrase: {result.phrase.ok ? 'read OK' : `skipped today (${result.phrase.reason})`}
+              {result.phrase.wer != null && ` · WER ${result.phrase.wer}`}
+              {result.phrase.syllables_per_s != null && ` · ${result.phrase.syllables_per_s} syll/s`}</p>
+          )}
           <p>Branches: {Object.entries(result.state.branches).map(([b, d]) => `${b} ${d.toFixed(2)}`).join(' · ') || '—'}</p>
           <ul>
             {result.features.map((f) => (
@@ -121,6 +110,8 @@ export default function PatientView() {
           </ul>
         </details>
       )}
+
+      <PromptSettings patientId={PATIENT_ID} status={prompt.status} onChange={prompt.updateSettings} onSendNow={prompt.sendNow} />
     </section>
   )
 }

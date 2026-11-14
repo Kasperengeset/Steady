@@ -13,6 +13,7 @@ import Notifications from './clinician/Notifications'
 import Patients from './clinician/Patients'
 import PatientDetail from './clinician/PatientDetail'
 import FriendNudge from './friend/FriendNudge'
+import FriendCirclePage from './features/engagement/FriendCirclePage'
 
 // Patient app (mobile): /  ·  Clinician portal (desktop): /clinician  ·  A friend's view: /friend/1
 export default function App() {
@@ -37,6 +38,7 @@ export default function App() {
         </Route>
         <Route path="friend/:pid" element={<FriendNudge />} />
         <Route path="join" element={<FriendCircle />} />
+        <Route path="circle/friend" element={<FriendCirclePage />} />
       </Routes>
     </BrowserRouter>
   )

@@ -1,15 +1,17 @@
 import { useState } from 'react'
 import type { PromptSettingsIn, PromptStatus } from '../../lib/api_checkin'
+import PushToggle from './PushToggle'
 import './checkin.css'
 
 interface Props {
+  patientId?: number // shows "Turn on notifications" (Web Push) when given
   status: PromptStatus | null
   onChange: (body: PromptSettingsIn) => Promise<void>
   onSendNow: () => Promise<void>
 }
 
 /** Reminder settings (#22): quiet hours, pause today, turn off, plus the demo trigger. */
-export default function PromptSettings({ status, onChange, onSendNow }: Props) {
+export default function PromptSettings({ patientId, status, onChange, onSendNow }: Props) {
   const st = status?.settings
   const [quiet, setQuiet] = useState<{ start: string; end: string } | null>(null)
   const [msg, setMsg] = useState<string | null>(null)
@@ -51,6 +53,7 @@ export default function PromptSettings({ status, onChange, onSendNow }: Props) {
             setQuiet(null)
           }, 'Saved')}>Save</button>
         </div>
+        {patientId !== undefined && st.enabled && <PushToggle patientId={patientId} />}
         {msg && <p className="muted">{msg}</p>}
       </details>
       <button className="link demo" onClick={() => run(onSendNow, "Today's prompt sent")}>

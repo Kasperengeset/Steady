@@ -1,321 +1,277 @@
-"""Load the demo: four patients with believable histories, built through the real API and engine.
+"""Demo data for the video and the clinician view: four patients with a believable history.
 
-    backend/.venv/bin/python scripts/seed_demo.py          # resets data/app.db, then fills it
+    backend/.venv/bin/python scripts/seed_demo.py            # seed an empty database (refuses if it has check-ins)
+    backend/.venv/bin/python scripts/seed_demo.py --reset    # delete the database first, then seed
+    backend/.venv/bin/python scripts/seed_demo.py --db /tmp/demo.db --reset
 
-Run it again right before recording, so the story ends today. No Gemini calls are made.
+It drives the REAL API in-process (FastAPI TestClient) day by day with the shared clock
+(app.baseline.clock) patched, like backend/tests/test_baseline.py. So baselines, scores,
+escalations, explanations, prompts and rewards are what the app itself computes.
 
-Alex (patient 1, the main demo), 44 days after TMS, ending this morning:
-  days 1-14   healthy baseline (confirmed by Dr. Virtanen)
-  days 15-32  well
-  days 33-44  gradual decline -> friends nudged, then the clinic flagged
-  today       morning Fitbit sync done; the live check-in happens in the demo
-  Activity and sleep: the team member's real Fitbit days (data/google_health_days.json, gitignored)
-      if present, else synthetic. In the decline, those real days are changed: fewer steps, later
-      activity, shorter and later sleep, higher resting heart rate, lower HRV.
-  Words: one written diary each evening, the team-written diary set plus a sentence bank mixed by
-      the day's state (synthetic).
-  Voice: simulated morning check-ins from the Androids corpus statistics in acoustic.json.
-  Actions: the real bandit; simulated answers with hidden helpfulness (a walk helps Alex most).
-Sara: well, then a sudden change, and yesterday a check-in mentioning self-harm.
-Jonas: baseline still building (day 9 of 14).
-Mia: steady, baseline waiting for the clinician to confirm.
-Everything except Alex's Fitbit days is simulated or team-written. Say so in the demo.
+- Voice: no audio at all. Acoustic features are synthetic, drawn from the corpus summary stats in
+  weights/acoustic.json["feature_stats"] (control → patient shift + within-person noise), as in the
+  simulator. Never Androids audio.
+- Text: team-written diaries in the first person, scored by the local text model. Nothing is sent to
+  Gemini (the key is blanked and transcription is never called).
+
+Patients (history ends today; nobody has checked in today, so the video can start with a check-in):
+  Mia    – steady for 30 days, locked baseline, reminders answered, rewards, streak, a small circle
+  Alex   – well for 16 days, then drifts into relapse over 14 days: friends nudge, then the clinician,
+           with "Why is this changing?" naming the features
+  Sara   – steady for 20 days, then a diary entry with a crisis phrase today: clinician at once
+  Jonas  – started 6 days ago, healthy baseline still building; in Mia's circle with his own avatar
 """
 
 import argparse
-import csv
-import json
+import os
 import random
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "backend"))
+REPO = Path(__file__).resolve().parents[1]
+TZ = ZoneInfo("Europe/Helsinki")
 
-from fastapi.testclient import TestClient  # noqa: E402
-from sqlmodel import Session, SQLModel  # noqa: E402
-
-from app import baseline as baseline_mod  # noqa: E402
-from app import db, appie  # noqa: E402
-from app.engine import state  # noqa: E402
-from app.main import app  # noqa: E402
-from app.models import Arm, Contact, ContactKind, FeatureSource, Patient  # noqa: E402
-from app.pipeline import PipelineResult  # noqa: E402
-from app.routers import checkins as checkins_router  # noqa: E402
-from app.seed import ARMS  # noqa: E402
-
-FITBIT = ROOT / "data" / "google_health_days.json"
-DIARY = ROOT / "ml" / "text" / "diary_sanity.csv"
-rng = random.Random(42)
-
-# ------------------------------------------------------------------ sentence bank (synthetic diary text)
 GOOD = [
-    "I slept well and got up before my alarm.", "I went for a walk by the water after lunch.",
-    "I had coffee with Sam and we laughed a lot.", "My work went fine today and I finished the report early.",
-    "I cooked a proper dinner and tried a new recipe.", "I called my sister in the evening, and it was nice to catch up.",
-    "I enjoyed the cold bright weather and biked to the shop.", "I read a few chapters before bed.",
-    "I felt rested and clear-headed most of the day.", "I went to the gym with Maya and stretched afterwards.",
-    "I planned our weekend trip and booked my tickets.", "I spent the afternoon fixing my bike with my neighbour.",
-]
-NEUTRAL = [
-    "Ordinary day at work with a few meetings.", "Did the laundry and some cleaning.",
-    "Watched a film in the evening.", "Bought groceries on the way home.",
-    "Answered emails for most of the morning.", "Rainy day, so I stayed mostly indoors.",
-    "Had leftovers for dinner.", "Took the bus into town for an errand.", "The day went by quickly.",
+    "I slept well and went for a walk by the sea this morning. I had lunch with my sister and we laughed a lot. I feel calm and I am looking forward to cooking dinner tonight.",
+    "I had a busy day at work but it went fine. I finished the report I was worried about and my manager was happy with it. In the evening I played guitar for an hour.",
+    "I met two friends for coffee and we talked about our summer plans. I feel rested today and I had energy to clean the flat and do the laundry.",
+    "I went to the gym after work and I feel good about it. I made a new recipe for dinner and it turned out nice. I am going to read a bit before bed.",
+    "Today was quiet. I worked from home, I took a long walk at lunch and I called my mother. I feel content and I am sleeping well this week.",
+    "I helped a colleague with a tricky problem and I felt useful. After work I went swimming. I am a bit tired now but in a good way.",
+    "I spent the morning in the garden and the afternoon with my nephew at the park. I enjoyed the sun. I am grateful for a simple, good day.",
+    "I had a relaxed weekend day. I went to a small concert with a friend and I really enjoyed the music. I feel like myself again.",
+    "I got up early and went running before work. My day was productive and I still had energy in the evening to meet my neighbours for tea.",
+    "I cooked with my partner tonight and we watched a funny film. Work was normal. I feel steady and I am glad the week went well.",
 ]
 LOW = [
-    "Did not get out of bed until late.", "I cancelled plans again, I just could not face it.",
-    "Everything feels heavy and slow right now.", "I am tired all the time, even after sleeping.",
-    "Did not really talk to anyone today.", "I keep thinking nothing I do makes a difference.",
-    "Skipped lunch, I was not hungry.", "I am fine I guess, just tired of pretending.",
-    "Stayed in my room and scrolled for hours.", "Could not focus at work and read the same email five times.",
-    "Felt flat all day, nothing seemed worth the effort.", "I left the messages unanswered again.",
+    "I slept badly again and I did not want to get out of bed. I cancelled lunch with my friend because I could not face it. Everything feels heavy.",
+    "I stayed at home all day. I tried to work but I could not concentrate on anything. I feel tired and empty and nothing seems worth the effort.",
+    "I did not answer my phone today. I feel like I am a burden to the people around me. I keep thinking that nothing will get better.",
+    "I woke up at four and could not fall asleep again. I feel numb. I did not eat much and I did not go outside at all.",
+    "I forced myself to go to work but I barely spoke to anyone. I feel alone even when people are around. I just want the day to end.",
+    "I have no energy for anything. I used to enjoy cooking but now I only eat toast. I feel hopeless and I keep blaming myself for everything.",
 ]
-CRISIS_ENTRY = ("I can't do this anymore. I stayed in bed all day and ignored everyone. "
-                "Some nights I think I don't want to be here anymore. I haven't told anyone.")
+CRISIS = (
+    "I have not slept for days and I feel completely alone. I don't want to be alive anymore and I keep "
+    "thinking that everyone would be better off without me. I do not know what to do."
+)
 
 
-def diary(d: float) -> str:
-    """5-7 sentences; each is low with probability d, else good or neutral."""
-    out = []
-    for _ in range(rng.randint(5, 7)):
-        r = rng.random()
-        pool = LOW if r < d else GOOD if r < d + (1 - d) * 0.6 else NEUTRAL
-        s = rng.choice(pool)
-        if s not in out:
-            out.append(s)
-    return " ".join(out)
+# Tuned so the stories read as intended: Mia stays below the friend threshold; Alex gets the friends nudge
+# first and the clinician a few days later. Change with care, re-run and read the printout.
+STORY_SEEDS = {"Mia": 0, "Alex": 0, "Sara": 0, "Jonas": 0}
 
 
-def team_entries() -> dict[str, str]:
-    rows = csv.DictReader(open(DIARY, encoding="utf-8"))
-    return {r["id"]: r["text"] for r in rows if r["variant"] == "as written"}
+def parse() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--reset", action="store_true", help="delete the database file first")
+    p.add_argument("--db", help="SQLite file (default: DATABASE_URL from .env, else data/app.db)")
+    p.add_argument("--seed", type=int, default=0, help="shift every story's random seed (default 0 = the tuned demo)")
+    return p.parse_args()
 
 
-# ------------------------------------------------------------------ simulated voice (corpus statistics)
-STATS = state.load_branch("acoustic").meta["feature_stats"]
+def main() -> int:
+    args = parse()
+    if args.db:
+        os.environ["DATABASE_URL"] = f"sqlite:///{Path(args.db).resolve()}"
+    os.environ["GEMINI_API_KEY"] = ""  # belt and braces: the demo never calls Gemini
+    sys.path.insert(0, str(REPO / "backend"))
 
+    from app.config import settings
 
-def voice(d: float, offset: dict) -> PipelineResult:
-    res = PipelineResult()
-    for f, st in STATS.items():
-        v = offset[f] + st["control_mean"] + d * (st["patient_mean"] - st["control_mean"]) + rng.gauss(0, st["within_sd"] * 0.8)
-        res.features.append((f, v, FeatureSource.emotion if f in ("arousal", "valence") else FeatureSource.prosody))
-    return res
+    db_path = Path(settings.database_url.removeprefix("sqlite:///"))
+    if args.reset and db_path.exists():
+        db_path.unlink()
+        print(f"deleted {db_path}")
 
+    from fastapi.testclient import TestClient
+    from sqlmodel import Session, select
 
-def person_offset() -> dict:
-    return {f: rng.gauss(0, st["sd"] * 0.5) for f, st in STATS.items()}
+    from app import baseline as baseline_mod
+    from app import db
+    from app.engine import state
+    from app.main import app
+    from app.models import Arm, CheckIn, Contact, ContactKind, Escalation, FeatureSource, Patient
+    from app.pipeline import PipelineResult, extract_text_features
+    from app.routers import checkins as checkins_router
+    from app.seed import ARMS, seed
 
+    settings.gemini_api_key = ""
+    db.init_db()
+    seed()  # Mia (id 1) + arms + contacts, as on a fresh install
+    with Session(db.engine) as s:
+        if s.exec(select(CheckIn)).first() is not None:
+            print(f"{db_path} already has check-ins – run with --reset to start over.")
+            return 1
 
-# ------------------------------------------------------------------ wearable days
-def synthetic_day(d: float) -> dict:
-    wake, bed = 7.0 + 2.0 * d + rng.gauss(0, 0.4), 23.0 + rng.gauss(0, 0.4)
-    level = 45 * (1 - 0.55 * d)
-    minutes = [max(0.0, rng.gauss(level, 15)) if wake <= i / 60 < bed and rng.random() < 0.3 else 0.0 for i in range(1440)]
-    return {"minute_steps": minutes, "sleep_hours": rng.gauss(7.4 - 1.3 * d, 0.4), "sleep_midpoint": rng.gauss(3.4 + 1.8 * d, 0.3),
-            "resting_hr": rng.gauss(60 + 5 * d, 1.5), "hrv_rmssd": rng.gauss(48 * (1 - 0.3 * d), 4)}
+    class R:  # one random stream per patient, so tuning one story never changes another
+        rng = random.Random()
 
+    def story(name: str) -> None:
+        R.rng = random.Random(f"{name}:{STORY_SEEDS[name] + args.seed}")
+    stats = state.load_branch("acoustic").meta["feature_stats"]
+    emotion = {"arousal", "valence"}
 
-def worsen(day: dict, f: float) -> dict:
-    """A real day, changed in the RADAR-MDD directions by f in [0, 1]."""
-    out = dict(day)
-    if "minute_steps" in day:
-        shift = int(150 * f)
-        m = [v * (1 - 0.55 * f) for v in day["minute_steps"]]
-        out["minute_steps"] = [0.0] * shift + m[: 1440 - shift]
-    if "sleep_hours" in day:
-        out["sleep_hours"] = max(3.5, day["sleep_hours"] - 1.3 * f)
-    if "sleep_midpoint" in day:
-        out["sleep_midpoint"] = day["sleep_midpoint"] + 1.8 * f
-    if "resting_hr" in day:
-        out["resting_hr"] = day["resting_hr"] + 5 * f
-    if "hrv_rmssd" in day:
-        out["hrv_rmssd"] = day["hrv_rmssd"] * (1 - 0.3 * f)
-    return out
+    def acoustic(depression: float) -> list[tuple[str, float, FeatureSource]]:
+        out = []
+        for f, st in stats.items():
+            mu = st["control_mean"] + depression * (st["patient_mean"] - st["control_mean"])
+            v = mu + R.rng.gauss(0, st["within_sd"] * 0.5)
+            out.append((f, v, FeatureSource.emotion if f in emotion else FeatureSource.prosody))
+        return out
 
+    queue: list[PipelineResult] = []
+    checkins_router.extract_features = lambda path: queue.pop(0)
+    checkins_router.extract_text_features = lambda text: queue.pop(0)
+    clock = {"now": datetime.now(timezone.utc)}
+    wall_start = datetime.now(timezone.utc) - timedelta(minutes=1)
+    baseline_mod.clock = lambda: clock["now"]
+    c = TestClient(app)
 
-def real_days() -> list[dict]:
-    if not FITBIT.exists():
-        return []
-    days = json.loads(FITBIT.read_text(encoding="utf-8"))
-    return [days[k] for k in sorted(days)]
+    def ok(r):
+        assert r.status_code < 300, f"{r.request.method} {r.request.url}: {r.status_code} {r.text}"
+        return r.json()
 
+    def at(day, hh: int, mm: int) -> None:
+        clock["now"] = datetime.combine(day, time(hh, mm), tzinfo=TZ).astimezone(timezone.utc)
 
-# ------------------------------------------------------------------ driver
-class Demo:
-    def __init__(self):
-        SQLModel.metadata.drop_all(db.engine)
-        db.init_db()
-        self.c = TestClient(app)  # no lifespan: no default seed, no model warm-up
-        self.t = datetime.now(timezone.utc)
-        baseline_mod.clock = lambda: self.t
-        self.voice_queue: list[PipelineResult] = []
-        checkins_router.extract_features = lambda path: self.voice_queue.pop(0)
+    def backdate_escalations() -> None:
+        """Escalation.ts defaults to the wall clock, not app.baseline.clock: move new rows to the simulated day."""
+        with Session(db.engine) as s:
+            sim = clock["now"]
+            for e in s.exec(select(Escalation)).all():
+                ts = e.ts if e.ts.tzinfo else e.ts.replace(tzinfo=timezone.utc)
+                if ts > wall_start and sim < wall_start:  # stamped by the wall clock just now
+                    e.ts = sim
+                    s.add(e)
+            s.commit()
 
-    def at(self, day: date, hh: int, mm: int = 0):
-        self.t = datetime(day.year, day.month, day.day, hh, mm, tzinfo=timezone.utc)
+    def spoken(pid: int, diary: str, depression: float, slot: str = "evening") -> dict:
+        res = extract_text_features(diary)  # local text model on the "transcript"
+        res.features = acoustic(depression) + res.features
+        res.speech_s = round(R.rng.uniform(18, 29), 1)
+        queue.append(res)
+        out = ok(c.post("/api/checkins", data={"patient_id": pid, "slot": slot},
+                        files={"audio": ("memo.wav", b"demo", "audio/wav")}))
+        backdate_escalations()
+        return out
 
-    def patient(self, name: str, friends: list[str]) -> int:
+    def written(pid: int, diary: str, slot: str = "evening") -> dict:
+        queue.append(extract_text_features(diary))
+        out = ok(c.post("/api/checkins/text", json={"patient_id": pid, "slot": slot, "text": diary}))
+        backdate_escalations()
+        return out
+
+    def new_patient(name: str, friend: str) -> int:
         with Session(db.engine) as s:
             p = Patient(name=name)
             s.add(p)
             s.commit()
             s.refresh(p)
-            for f in friends:
-                s.add(Contact(patient_id=p.id, name=f, kind=ContactKind.friend))
+            s.add(Contact(patient_id=p.id, name=friend, kind=ContactKind.friend))
             s.add(Contact(patient_id=p.id, name="Dr. Virtanen", kind=ContactKind.clinician))
             for key, label in ARMS:
                 s.add(Arm(patient_id=p.id, key=key, label=label))
             s.commit()
             return p.id
 
-    def ok(self, r):
-        assert r.status_code == 200, r.text
-        return r.json()
+    def day_of_prompted_checkin(pid, day, diary, depression, action: bool | None = None, late=False):
+        """The daily moment: the prompt fires, the person answers (usually within the hour)."""
+        hh, mm = R.rng.randint(10, 18), R.rng.choice([0, 10, 20, 30, 40, 50])
+        at(day, hh, mm)
+        ok(c.post(f"/api/patients/{pid}/prompt/now"))
+        delay = R.rng.randint(150, 300) if late else R.rng.randint(3, 70)
+        clock["now"] += timedelta(minutes=delay)
+        out = spoken(pid, diary, depression)
+        if action is not None:
+            clock["now"] += timedelta(hours=2)
+            ok(c.post(f"/api/patients/{pid}/habits/action", json={"done": action, "rating": R.rng.randint(3, 5) if action else None}))
+        return out
 
-    def wearable(self, pid, day):
-        return self.ok(self.c.post("/api/checkins/wearable", json={"patient_id": pid, "slot": "morning", **day}))
+    today = datetime.now(TZ).date()
+    created = []
 
-    def spoken(self, pid, res):
-        self.voice_queue.append(res)
-        return self.ok(self.c.post("/api/checkins", data={"patient_id": pid, "slot": "morning"},
-                                   files={"audio": ("checkin.wav", b"RIFF", "audio/wav")}))
+    # --- Mia: steady, 30 days, ends yesterday -------------------------------------------------
+    mia = 1
+    story("Mia")
+    for i in range(30, 0, -1):
+        if i in (12, 21):  # a couple of missed days: nothing is lost, the companion is kind
+            continue
+        last = day_of_prompted_checkin(mia, today - timedelta(days=i), R.rng.choice(GOOD), 0.0,
+                                       action=R.rng.random() < 0.75, late=R.rng.random() < 0.15)
+    created.append(("Mia", "steady 30 days", last))
 
-    def written(self, pid, text):
-        return self.ok(self.c.post("/api/checkins/text", json={"patient_id": pid, "slot": "evening", "text": text}))
+    # --- Alex: well, then a slow drift into relapse ---------------------------------------------
+    alex = new_patient("Alex", "Sanna")
+    story("Alex")
+    days = 30
+    for k in range(days):
+        i = days - k  # days ago (30 … 1)
+        drift = 0.0 if k < 16 else min(1.6, (k - 15) * 0.12)
+        # Low entries become more common as the voice drifts – not all at once (the text branch is strong)
+        diary = R.rng.choice(LOW) if R.rng.random() < min(1.0, max(0.0, (drift - 0.3) / 1.6)) else R.rng.choice(GOOD)
+        last = day_of_prompted_checkin(alex, today - timedelta(days=i), diary, drift,
+                                       action=R.rng.random() < (0.7 if drift < 0.6 else 0.3), late=drift > 1)
+    created.append(("Alex", "relapse drift over the last 14 days", last))
 
-    def feedback(self, pid, day: date, d: float, helpful: dict):
-        today = self.ok(self.c.get(f"/api/patients/{pid}/today"))
-        if not today["action"] or today["action"]["date"] != day.isoformat():
-            return
-        arm = today["action"]["arm_key"]
-        done = rng.random() < 0.85 - 0.45 * d
-        helped = done and rng.random() < helpful.get(arm, 0.4) * (1 - 0.3 * d)
-        rating = (rng.randint(4, 5) if helped else rng.randint(1, 3)) if done else None
-        self.ok(self.c.post("/api/interventions/feedback",
-                            json={"patient_id": pid, "date": day.isoformat(), "completed": done, "rating": rating}))
+    # --- Sara: steady, then a crisis phrase in today's written diary ----------------------------
+    sara = new_patient("Sara", "Ida")
+    story("Sara")
+    for i in range(20, 0, -1):
+        last = day_of_prompted_checkin(sara, today - timedelta(days=i), R.rng.choice(GOOD), 0.0, action=True)
+    at(today, 8, 15)
+    clock["now"] = min(clock["now"], datetime.now(timezone.utc))
+    last = written(sara, CRISIS, slot="morning")
+    created.append(("Sara", "crisis phrase in today's diary", last))
 
-    def confirm(self, pid):
-        self.ok(self.c.post(f"/api/patients/{pid}/baseline/confirm", json={"clinician": "Dr. Virtanen"}))
+    # --- Jonas: baseline still building --------------------------------------------------------
+    jonas = new_patient("Jonas", "Mia")
+    story("Jonas")
+    for i in range(6, 0, -1):
+        last = day_of_prompted_checkin(jonas, today - timedelta(days=i), R.rng.choice(GOOD), 0.0, action=True)
+    created.append(("Jonas", "baseline building (6 days)", last))
 
-    def live_day(self, pid, day: date, d: float, wear: dict, text: str | None, offset: dict | None, helpful: dict,
-                 feedback: bool = True):
-        self.at(day, 7, 40)
-        self.wearable(pid, wear)
-        if offset is not None:
-            self.at(day, 8, 10)
-            self.spoken(pid, voice(d, offset))
-        if text:
-            self.at(day, 20, 30)
-            out = self.written(pid, text)
-        if feedback:
-            self.at(day, 21, 0)
-            self.feedback(pid, day, d, helpful)
-        return locals().get("out")
+    # --- Circle: Mia's, with Jonas (his own avatar) and a light friend account -----------------
+    clock["now"] = datetime.now(timezone.utc) - timedelta(minutes=5)
+    for pid, name in ((mia, "Mia"), (jonas, "Jonas")):
+        ok(c.put(f"/api/patients/{pid}/profile", json={
+            "social_consent": True, "mode": "profile", "display_name": name,
+            "share_avatar": True, "share_level": True, "share_streak": True, "share_checked_in": True}))
+    circle = ok(c.post(f"/api/patients/{mia}/circle", json={"name": "Mia's circle"}))
+    code = circle.get("invite_code") or circle.get("circle", {}).get("invite_code")
+    jonas_m = ok(c.post("/api/circles/join", json={"code": code, "patient_id": jonas}))
+    emil = ok(c.post("/api/circles/join", json={"code": code, "name": "Emil"}))
+    mia_member = circle.get("member_id") or circle.get("me", {}).get("member_id")
+    reactions = 0
+    if mia_member:
+        for token, kind in ((emil["token"], "sun"), (jonas_m["token"], "hug")):
+            if c.post("/api/circles/react", json={"token": token, "to_member_id": mia_member, "kind": kind}).status_code < 300:
+                reactions += 1
 
-
-def ramp(i: int, start: int, length: int) -> float:
-    return min(1.0, max(0.0, (i - start + 1) / length))
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Create a synthetic local demo; existing data is kept unless --reset is explicit.")
-    parser.add_argument("--reset", action="store_true", help="replace the selected demo database (never use for real patient data)")
-    args = parser.parse_args()
-    database_path = db.engine.url.database
-    if database_path and database_path != ":memory:" and Path(database_path).exists() and not args.reset:
-        parser.error("Database already exists. Use a separate DATABASE_URL, or --reset only for disposable demo data.")
-    demo = Demo()
-    today = datetime.now(timezone.utc).date()
-    team = team_entries()
-    real = real_days()
-    print(f"Fitbit: {'real days from ' + str(FITBIT.relative_to(ROOT)) if real else 'not found, using synthetic days'}")
-
-    # ---- Alex: 44 days + this morning
-    alex = demo.patient("Alex", ["Sam", "Maya"])
-    off = person_offset()
-    helpful = {"walk_outside": 0.85, "call_friend": 0.65, "morning_light": 0.6, "small_task": 0.5, "music": 0.4, "breathing": 0.35}
-    n, decline_start = 44, 32
-    good_slots = {1: "good_1", 4: "good_2", 7: "good_3", 10: "good_4", 12: "good_5"}
-    low_slots = {35: "low_5", 37: "low_3", 39: "low_2", 41: "low_4", 43: "low_1"}
-    print("\nAlex (main demo)")
-    for i in range(n):
-        day = today - timedelta(days=n - i)
-        f = ramp(i, decline_start, n - decline_start)
-        d = 0.1 + 0.8 * f
-        if real:
-            base = real[i] if i < len(real) else real[len(real) - 14 + (i - len(real)) % 14]
-            wear = worsen(base, f) if f > 0 else base
-        else:
-            wear = synthetic_day(d)
-        text = team.get(good_slots.get(i, ""), None) or team.get(low_slots.get(i, ""), None) or diary(d)
-        out = demo.live_day(alex, day, d, wear, text, off, helpful)
-        if i == 14:
-            demo.confirm(alex)
-        st = out["state"] if out else {}
-        print(f"  {day} {'baseline' if i < 14 else 'decline ' if f > 0 else 'well    '} "
-              f"S={'-' if st.get('S') is None else format(st['S'], '+.2f')} level={st.get('level', 0)}")
-    demo.at(today, 7, 40)
-    demo.wearable(alex, worsen(real[-1], 1.0) if real else synthetic_day(0.9))
-
-    # ---- Sara: well, then sudden change and a crisis check-in yesterday
-    sara = demo.patient("Sara", ["Lina"])
-    off_s = person_offset()
-    for i in range(30):
-        day = today - timedelta(days=30 - i)
-        d = 0.1 if i < 26 else 0.75
-        text = CRISIS_ENTRY if i == 29 else diary(d)
-        demo.live_day(sara, day, d, synthetic_day(d), text, off_s, helpful, feedback=i < 29)
-        if i == 15:
-            demo.confirm(sara)
-
-    # ---- Jonas: baseline building, day 9 of 14
-    jonas = demo.patient("Jonas", ["Erik"])
-    off_j = person_offset()
-    for i in range(9):
-        day = today - timedelta(days=9 - i)
-        demo.live_day(jonas, day, 0.1, synthetic_day(0.1), diary(0.1), off_j, helpful, feedback=False)
-
-    # ---- Mia: steady, baseline not yet confirmed
-    mia = demo.patient("Mia", ["Jonas"])
-    off_m = person_offset()
-    for i in range(35):
-        day = today - timedelta(days=35 - i)
-        demo.live_day(mia, day, 0.1, synthetic_day(0.1), diary(0.1) if i % 2 == 0 else None, off_m, helpful)
-
-    # ---- summary
-    demo.at(today, 9, 0)
-    invite_code = None
-    for pid, nickname in ((alex, "Alex"), (sara, "Sara"), (jonas, "Jonas"), (mia, "Mia")):
-        demo.ok(demo.c.put(f"/api/patients/{pid}/profile", json={
-            "mode": "profile", "display_name": nickname, "social_consent": True,
-            "share_avatar": True, "share_level": True, "share_streak": True, "share_checked_in": True,
-        }))
-        if invite_code is None:
-            created = demo.ok(demo.c.post(f"/api/patients/{pid}/circle", json={"name": "Steady demo"}))
-            invite_code = created["invite_code"]
-        else:
-            demo.ok(demo.c.post("/api/circles/join", json={"code": invite_code, "patient_id": pid}))
-    with Session(db.engine) as session:
-        for pid, xp, hobby in ((alex, 180, "Play guitar"), (sara, 80, "Make something"),
-                               (jonas, 25, "Read a chapter"), (mia, 710, "Tend the plants")):
-            habit = appie.add_habit(session, pid, hobby)
-            appie.tick_habit(session, pid, habit.key)
-            appie.feed(session, pid, min(20, xp))
-        print(f"Appie demo ready: food, upgraded looks, hobbies, and circle {invite_code}.")
-    c = demo.c
-    pts = demo.ok(c.get("/api/patients"))
-    print("\nPatients:", ", ".join(f"{p['name']} (S {p['S'] if p['S'] is None else round(p['S'], 2)}, level {p['level']})" for p in pts))
-    print("Notifications:", [f"{n['patient']}: {n['kind']}" for n in demo.ok(c.get("/api/clinician/notifications"))])
-    t = demo.ok(c.get(f"/api/patients/{alex}/today"))
-    print(f"Alex today: {t['status_text']} | action: {t['action']['label'] if t['action'] else None} | {t['action']['reason'] if t['action'] else ''}")
-    print("Alex what helps:", [(a["label"], a["learned"], f"{a['helped']}/{a['done']}") for a in demo.ok(c.get(f"/api/patients/{alex}/insights"))[:3]])
-    e = demo.ok(c.get(f"/api/patients/{alex}/explain?days=14"))
-    print("Alex why (14 days):", e.get("summary"))
-    print(f"\nDemo loaded into {db.engine.url.database}. Start the backend and open the app.")
+    # --- Report ---------------------------------------------------------------------------------
+    clock["now"] = datetime.now(timezone.utc)
+    print(f"\nSeeded {db_path}\n")
+    print(f"{'patient':8} {'story':40} {'baseline':9} {'S':>6} {'level':>5}  rewards")
+    ids = {"Mia": mia, "Alex": alex, "Sara": sara, "Jonas": jonas}
+    for name, story, out in created:
+        pid = ids[name]
+        rw = ok(c.get(f"/api/patients/{pid}/rewards"))  # also pays every reward that is due
+        S = out["state"]["S"]
+        print(f"{name:8} {story:40} {out['baseline']['status']:9} {S if S is None else round(S, 2)!s:>6} "
+              f"{out['state']['level']:>5}  balance {rw.get('balance')}, streak {rw.get('streak')}")
+    with Session(db.engine) as s:
+        ladder = [f"{(e.ts.replace(tzinfo=timezone.utc).astimezone(TZ)).date()} → {e.recipient.value} ({e.reason})"
+                  for e in s.exec(select(Escalation).where(Escalation.patient_id == alex).order_by(Escalation.ts))]
+    print("\nAlex – escalations: " + ("; ".join(ladder) or "none"))
+    alex_detail = ok(c.get(f"/api/patients/{alex}"))
+    if alex_detail.get("explanation"):
+        print(f"\nAlex – why: {alex_detail['explanation']['sentence']}")
+    print(f"\nCircle '{circle.get('name', "Mia's circle")}' (code {code}): Mia, Jonas, Emil; {reactions} reactions")
+    print("Mia has not checked in today: open the app and press \"Demo: send today's prompt now\".")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

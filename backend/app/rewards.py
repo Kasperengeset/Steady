@@ -19,7 +19,7 @@ from sqlmodel import Session, col, select
 from sqlalchemy import update
 
 from .db import engine
-from .models import CheckIn, Feature, FeatureSource, InterventionLog, Patient
+from .models import Arm, CheckIn, Feature, FeatureSource, InterventionLog, Patient
 from .models_rewards import RewardLedger
 
 AMOUNTS = {"memo": 10, "memo_on_time": 5, "action_done": 10, "followup": 3, "streak_7": 20}
@@ -331,10 +331,19 @@ def week(s: Session, patient_id: int, now: datetime, days: int = 7) -> dict:
         RewardLedger.patient_id == patient_id, col(RewardLedger.date) >= span[0], RewardLedger.amount > 0
     )).all():
         earned[r.date] += r.amount
+    # Today's small thing (the bandit's pick, made at the first check-in). Its log date is the UTC day.
+    log = s.exec(select(InterventionLog).where(
+        InterventionLog.patient_id == patient_id, InterventionLog.date == aware(now).date()
+    )).first()
+    arm = log and s.exec(select(Arm).where(Arm.patient_id == patient_id, Arm.key == log.arm_key)).first()
     return {
         "days": [d.isoformat() for d in span],
         "habits": [{"key": k, "label": label, "done": done[k]} for k, label in BUILTIN_HABITS],
         "earned": [earned[d] for d in span],
+        "today_action": None if log is None else {
+            "arm_key": log.arm_key, "label": arm.label if arm else log.arm_key,
+            "answered": log.completed is not None, "done": bool(log.completed),
+        },
     }
 
 

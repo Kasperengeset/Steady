@@ -7,6 +7,7 @@ the support screen. Never only friends. The text itself is not stored.
 
 from sqlmodel import Session
 
+from . import baseline
 from .engine.escalation import CRISIS
 from .models import ContactKind, Escalation, Patient
 from .pipeline.text import crisis_hits
@@ -16,7 +17,7 @@ def check(s: Session, patient: Patient, *texts: str | None, where: str) -> bool:
     """True if any text has a crisis phrase; then the crisis path has run (not committed)."""
     if not any(crisis_hits(t) for t in texts if t):
         return False
-    s.add(Escalation(patient_id=patient.id, level=CRISIS, recipient=ContactKind.clinician,
+    s.add(Escalation(patient_id=patient.id, level=CRISIS, recipient=ContactKind.clinician, ts=baseline.clock(),
                      reason=f"crisis phrase in {where}"))
     patient.risk_level = CRISIS
     s.add(patient)

@@ -165,6 +165,12 @@ def test_week_view(client):
     action = next(h for h in out["habits"] if h["key"] == "action")["done"]
     assert memo[-3:] == [True, False, True] and action[-1] is True and action[-3] is False
     assert out["earned"][-1] == 10 + 10 + 3
+    assert out["today_action"]["answered"] is True and out["today_action"]["done"] is True
+    assert out["today_action"]["label"]
+
+
+def test_week_view_before_any_checkin_has_no_action(client):
+    assert client.get("/api/patients/1/habits/week").json()["today_action"] is None
 
 
 def test_unknown_patient(client):
