@@ -1,12 +1,14 @@
 """Text branch (pipeline/text.py) and the written-diary endpoint, on the real exported model."""
 
 import csv
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import SQLModel
 
+from app import baseline as baseline_mod
 from app import db
 from app import pipeline
 from app.main import app
@@ -153,15 +155,22 @@ def test_refuses_androids_audio(monkeypatch, tmp_path):
 # ---------------------------------------------------------------- written diary through the engine
 
 @pytest.fixture()
-def client():
+def client(monkeypatch):
     SQLModel.metadata.drop_all(db.engine)
     db.init_db()
     seed()
-    return TestClient(app)
+    c = TestClient(app)
+    # One diary per day, as in real use (check-ins on the same day are combined, STATUS.md B16)
+    c.day = 0
+    start = datetime.now(timezone.utc) + timedelta(minutes=1)
+    monkeypatch.setattr(baseline_mod, "clock", lambda: start + timedelta(days=c.day))
+    return c
 
 
 def post_text(c, text, slot="evening"):
-    return c.post("/api/checkins/text", json={"patient_id": 1, "slot": slot, "text": text})
+    r = c.post("/api/checkins/text", json={"patient_id": 1, "slot": slot, "text": text})
+    c.day += 1
+    return r
 
 
 def test_written_diary_builds_baseline_then_flags_a_low_day(client):
