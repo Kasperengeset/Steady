@@ -20,7 +20,7 @@
 Per innsjekk:
 1. Trekk ut tall (features) per gren.
 2. **z-score mot pasientens egen baseline** (siste 14 dager): `z = retning × (i dag − snitt) / sd`.
-3. Delscore per gren: `D_gren = Σ vekt × z`.
+3. Delscore per gren: `D_gren = Σ vekt × z / √(Σ vekt²)` (SD 1 når ingenting endres, se B10).
 4. Dagsscore `D_t` = snitt av grenene som har data i dag.
 5. Glatting: `S_t = 0,3·D_t + 0,7·S_(t−1)`.
 6. Eskalering: venner ved S > 1 i 3 dager · behandler ved S > 2 · umiddelbart ved krise-flagg.
@@ -84,13 +84,49 @@ Alle retninger stemmer med litteraturen. `pause_ratio` snur fortegn i den samled
 
 ## 3. Viktige konsepter (ting vi har diskutert)
 
+### Hva modellen er – og ikke er
+**Ett enkelt klipp gir nesten ingenting brukbart alene.**
+- **I appen** gir ett klipp bare 8 trekk-verdier. Score (`S`) kommer først når det finnes nok tidligere innsjekker å sammenligne med.
+- **`ml/score_clip.py`** gir `P(depresjonslignende stemme)` mot korpuset. AUC 0,77 betyr riktig rangering av et tilfeldig par deprimert/frisk 77 % av gangene, men for én person er feilmarginen stor. Den er trent på italiensk tale, er mikrofonavhengig og er **ingen diagnose**.
+
+Treningen gir to ting, ingen av dem en prediksjon:
+1. **Validering av måleinstrumentet:** trekkene bærer depresjonssignal på et klinisk korpus (AUC 0,77, alle retninger i tråd med litteraturen).
+2. **Vekter:** hvilke trekk som teller mest når vi måler *endring*.
+
+Det nyttige resultatet er **tidsserien S_t over dager**, ikke det enkelte klippet.
+
+**Ikke vist:** at trente vekter oppdager tilbakefall bedre enn like vekter. Det krever data der samme personer følges gjennom et tilbakefall, og Androids har ett opptak per person.
+**Pitch:** si «trekkene er validert på klinisk korpus», **ikke** «modellen oppdager depresjon med 77 % nøyaktighet».
+
 ### Vi måler endring, ikke diagnose
 Appen sammenligner pasienten med seg selv. **Er noen allerede deprimert når vi begynner, blir det baselinen, og vi ser ingen avvik.** Det fungerer likevel for denne oppgaven:
 - Pasientene starter etter **vellykket TMS**, altså i remisjon, og klinikken vet det fra depresjonsscorene under behandlingen.
 - Baselinen er derfor «frisk normal», og vi leter etter **tilbakefall**.
 
-### Svakhet: langsomt tilbakefall glir inn i baselinen ⚠️
-Den glidende baselinen på 14 dager tilpasser seg et tilbakefall som kommer sakte over uker. Løsningen er planlagt (åpen oppgave T1):
+### Simulatoren (`backend/app/sim/simulator.py`)
+Kjører den **ekte motoren** (`state.py`, `bandit.py`, `escalation.py`, trent `acoustic.json`) på en syntetisk pasient i 70 dager, med én talt innsjekk per dag.
+- Latent depresjon `d_t` i [0, 1] følger en AR(1)-prosess. Et langsomt tilbakefall starter dag 40 og bygger seg opp over ~15 dager.
+- Trekk = personlig forskyvning + `d_t` × (pasientsnitt − kontrollsnitt fra korpuset) + støy. Effektstørrelsene er realistiske, fra Androids (Cohens d 0,2–0,9), og lagres som `feature_stats` i `acoustic.json`.
+- Banditen velger tiltak. Hvert tiltak har en skjult «sann» nytte.
+- API: `POST /api/sim/run` gir én pasient. `GET /api/sim/robustness?seeds=50` gir tall over mange pasienter, og **det er de tallene som skal brukes utad, ikke ett heldig frø.**
+
+**Resultater over 50 syntetiske pasienter:**
+
+| | Glidende baseline (dagens app) | Fast «frisk baseline» (T1) |
+|---|---|---|
+| Tilbakefall som ikke oppdages | **21/50** | **0/50** |
+| Falske alarmer før tilbakefall (snitt, dager) | 1,56 | 0,38 |
+| Oppdaget før selvrapport (median) | ~1 dag (bare de oppdagede) | ~0,5 dag |
+| Banditen finner beste tiltak | 19/50 (tilfeldig ≈ 8/50) | |
+
+Tolkning:
+- **Den faste baselinen er nødvendig.** Den glidende «spiser» tilbakefallet. I frø 0 stiger S til 1,35 og synker til −0,2 mens pasienten fortsatt er syk.
+- **Vi oppdager ikke tilbakefall tydelig tidligere enn selvrapport**, selv med en antatt forsinkelse på 4 dager i selvrapporten. Gevinsten er at vi oppdager det *passivt og pålitelig* (0/50 bommer) uten at pasienten må fylle ut skjema. Ikke påstå tidlig varsling i pitchen uten å ha vist det.
+- **Banditen lærer svakt på 70 dager.** Belønningen er maks 0,5, fordi «ble tilstanden bedre?» ikke er koblet inn (T8).
+- **Antakelser** (følger med i API-svaret): dag-til-dag-støy = 0,6 × variasjonen mellom personer, selvrapport 4 dager forsinket, og uavhengig støy i trekkene (ekte trekk henger sammen, så signalet er noe overvurdert).
+
+### Svakhet: langsomt tilbakefall glir inn i baselinen ⚠️ (bekreftet i simulatoren)
+Den glidende baselinen på 14 dager tilpasser seg et tilbakefall som kommer sakte over uker. **Simulatoren viser at 21/50 tilbakefall går tapt.** Løsningen (T1, høyeste prioritet) er:
 - **fast «frisk baseline»** fra de første ~2 ukene etter behandling, som fanger langsom glidning
 - **glidende baseline** for de siste 14 dagene, som fanger brå endring
 
@@ -125,12 +161,14 @@ Tale går til akustikk-grenen, skrevet dagbok til tekst-grenen. Gemini brukes i 
 | B7 | Nettleseren konverterer opptak til 16 kHz mono WAV | Backend trenger ikke ffmpeg |
 | B8 | Rå lyd slettes rett etter uttrekk | Personvern |
 | B9 | Samme uttrekkskode i trening (`ml/`) og app (`backend/app/pipeline/`) | Vektene blir gyldige for appens trekk |
+| B10 | Delscore per gren skaleres: `D_b = Σ w·z / √(Σ w²)` | Med vekter som summerer til 1 var D et vektet snitt med SD ≈ 0,36, så eskaleringsgrensene (S > 1, S > 2) ble nesten aldri nådd. Nå er D ~ N(0, 1) når ingenting endrer seg |
+| B11 | Simulatoren bruker den ekte motoren og effektstørrelser fra korpuset | Demoen viser det systemet faktisk gjør; robusthet måles over 50 frø |
 
 ---
 
 ## 5. Åpne oppgaver
 
-- [ ] **T1** Fast «frisk baseline» i tillegg til den glidende (`engine/state.py`, `routers/checkins.py`)
+- [ ] **T1 (høyest prioritet)** Fast «frisk baseline» i tillegg til den glidende (`engine/state.py`, `routers/checkins.py`). Simulatoren viser 21/50 bom uten den, 0/50 med.
 - [ ] **T2** Ved talt innsjekk skal plassholderen for Gemini **ikke** legge tilfeldige tekst-trekk inn i scoren, bare transkripsjon og krise-flagg (`pipeline/__init__.py`)
 - [ ] **T3** Tekst-grenen: trene på teamets tekstdatasett → `weights/text.json`
 - [ ] **T4** Helse-grenen: Fitbit/Google Health-adapter, vekter fra Depresjon-datasettet (aktivitet minutt for minutt, MADRS)
@@ -140,7 +178,9 @@ Tale går til akustikk-grenen, skrevet dagbok til tekst-grenen. Gemini brukes i 
 - [ ] **T8** Belønningen til banditen: «ble tilstanden bedre?» (`S_{t+1} < S_t`) er ikke koblet inn (`routers/interventions.py`)
 - [ ] **T9** Test med Kaspers egne opptak (`ml/score_clip.py`)
 - [ ] **T10** Baseline: høyere minimum (~5–7 innsjekker før z-score) og egen baseline for morgen og kveld (`state.zscores`, `_baseline_history`)
-- [ ] Simulator for demo-slider (`sim/simulator.py` er en plassholder)
+- [x] Simulator med den ekte motoren (`sim/simulator.py`, `/api/sim/run`, `/api/sim/robustness`)
+- [ ] **T11** Demo-visning i frontend: slider over dagene, S (glidende vs. fast) mot selvrapport, og hva banditen har lært (typer finnes i `frontend/src/lib/api.ts`)
+- [ ] **T12** Kalibrere eskaleringsgrensene: avveining mellom hvor raskt vi oppdager og antall falske alarmer, over mange frø i simulatoren
 
 ---
 

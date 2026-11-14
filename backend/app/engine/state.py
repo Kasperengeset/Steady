@@ -1,7 +1,7 @@
 """State engine – docs/plan.md §4, split into three branches.
 
 Per branch b:  z_i = s_i * (x_i - mu_i) / sigma_i   (personal baseline window)
-               D_b = sum_i w_i z_i
+               D_b = sum_i w_i z_i / sqrt(sum_i w_i^2)   (unit variance under no change)
 Daily:         D_t = mean of D_b over branches with data today
                S_t = alpha * D_t + (1 - alpha) * S_{t-1}
 
@@ -79,7 +79,18 @@ def zscores(today: dict[str, float], history: dict[str, list[float]], direction:
 
 
 def branch_deviation(z: dict[str, float], model: BranchModel) -> float:
-    return sum(model.weights.get(k, 0.0) * v for k, v in z.items())
+    """Weighted sum of z-scores, rescaled to unit variance under 'no change'.
+
+    With weights summing to 1, sum(w*z) is a weighted *mean* whose noise SD is sqrt(sum w^2) (≈0.36 for
+    8 features), so fixed escalation thresholds (S > 1, S > 2) would almost never trigger. Dividing by
+    sqrt(sum w^2) makes D ~ N(0, 1) when nothing changes (assuming independent features; real features
+    are correlated, so true noise is somewhat larger).
+    """
+    w = {k: model.weights.get(k, 0.0) for k in z}
+    norm = sum(v * v for v in w.values()) ** 0.5
+    if norm == 0:
+        return 0.0
+    return sum(w[k] * v for k, v in z.items()) / norm
 
 
 def daily_deviation(branch_D: dict[str, float]) -> float | None:

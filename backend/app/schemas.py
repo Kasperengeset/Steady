@@ -62,5 +62,6 @@ class FriendHint(BaseModel):
 
 
 class SimIn(BaseModel):
-    days: int = 60
+    days: int = 70
     seed: int = 0
+    relapse_day: int = 40

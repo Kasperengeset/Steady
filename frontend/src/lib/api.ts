@@ -48,12 +48,50 @@ export const api = {
   patients: () => fetch('/api/patients').then(json<PatientSummary[]>),
   patient: (id: number) => fetch(`/api/patients/${id}`).then(json<PatientDetail>),
   friendHint: (patientId: number) => fetch(`/api/friends/${patientId}/hint`).then(json<FriendHint>),
-  simulate: (days = 60, seed = 0) =>
+  simulate: (days = 70, seed = 0, relapse_day = 40) =>
     fetch('/api/sim/run', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ days, seed }),
-    }).then(json<{ day: number; S: number; self_mood: number }[]>),
+      body: JSON.stringify({ days, seed, relapse_day }),
+    }).then(json<SimResult>),
+  simRobustness: (seeds = 50) => fetch(`/api/sim/robustness?seeds=${seeds}`).then(json<SimRobustness>),
+}
+
+export interface SimDay {
+  day: number
+  latent: number
+  self_mood: number
+  S_rolling: number | null
+  S_anchored: number | null
+  level_rolling: number
+  level_anchored: number
+  arm: string
+  completed: boolean
+  reward: number
+  features: Record<string, number>
+}
+type ByBaseline<T> = { rolling: T; anchored: T }
+export interface SimResult {
+  days: SimDay[]
+  summary: {
+    relapse_starts: number
+    self_report_flag_day: number | null
+    engine_flag_day: ByBaseline<number | null>
+    lead_days_vs_self_report: ByBaseline<number | null>
+    false_alarm_days_before_relapse: ByBaseline<number>
+    arms: Record<string, { label: string; true: number; learned: number; times_chosen: number }>
+    bandit_top_arm: string
+    true_best_arm: string
+  }
+  assumptions: Record<string, string>
+  weights_trained: boolean
+}
+export interface SimRobustness {
+  seeds: number
+  median_lead_days: ByBaseline<number | null>
+  missed_relapses: ByBaseline<number>
+  mean_false_alarm_days: ByBaseline<number>
+  bandit_finds_best_arm: string
 }
 
 /** Backend stores dates in UTC. */

@@ -1,6 +1,6 @@
 # Acoustic branch – training summary
 
-Trained 2026-11-14T08:26:43+00:00 on `androids_interview` · 114 speakers (62 depressed) · folds: corpus fold-lists.csv (100% of speakers)
+Trained 2026-11-14T08:45:04+00:00 on `androids_interview` · 114 speakers (62 depressed) · folds: corpus fold-lists.csv (100% of speakers)
 
 ## Speaker-independent AUC
 

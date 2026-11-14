@@ -175,6 +175,15 @@ def main() -> None:
         "auc": {k: v for k, v in results["app"].items() if not k.startswith("_")},
         "auc_reference": {k: r["mean"] for k, r in results.items() if k != "app"},
         "literature_disagreements": disagree,
+        # Speaker-level distributions (derived stats, no audio) – the simulator uses these for realistic effect sizes
+        "feature_stats": {
+            f: {
+                "control_mean": round(float(spk.loc[y == 0, f"app_{f}"].mean()), 5),
+                "patient_mean": round(float(spk.loc[y == 1, f"app_{f}"].mean()), 5),
+                "sd": round(float(np.sqrt((spk.loc[y == 0, f"app_{f}"].var() + spk.loc[y == 1, f"app_{f}"].var()) / 2)), 5),
+            }
+            for f in feats
+        },
         "n_speakers": int(len(spk)),
         "n_depressed": int(y.sum()),
         "trained_on": f"androids_{args.task}",
