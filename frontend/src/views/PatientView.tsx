@@ -111,7 +111,7 @@ export default function PatientView() {
         </details>
       )}
 
-      <PromptSettings status={prompt.status} onChange={prompt.updateSettings} onSendNow={prompt.sendNow} />
+      <PromptSettings patientId={PATIENT_ID} status={prompt.status} onChange={prompt.updateSettings} onSendNow={prompt.sendNow} />
     </section>
   )
 }

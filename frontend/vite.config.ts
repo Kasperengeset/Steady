@@ -8,6 +8,8 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: ['icon.svg'],
+      // Web Push for the daily prompt (#22): push + notificationclick handlers live in public/push-sw.js
+      workbox: { importScripts: ['push-sw.js'] },
       manifest: {
         name: 'Beyond the Clinic',
         short_name: 'Beyond',
