@@ -56,7 +56,26 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export interface PushStatus { enabled: boolean; public_key: string | null; devices: number | null }
+
 export const checkinApi = {
+  /** Web Push (#22, P2): enabled = the server has VAPID keys. */
+  push: (patientId: number) => fetch(`/api/patients/${patientId}/push`).then(json<PushStatus>),
+  pushSubscribe: (patientId: number, sub: PushSubscriptionJSON) =>
+    fetch(`/api/patients/${patientId}/push/subscribe`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(sub),
+    }).then(json<PushStatus>),
+  pushUnsubscribe: (patientId: number, endpoint: string) =>
+    fetch(`/api/patients/${patientId}/push/unsubscribe`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ endpoint }),
+    }).then(json<PushStatus>),
+  pushTest: (patientId: number) =>
+    fetch(`/api/patients/${patientId}/push/test`, { method: 'POST' }).then(json<{ sent: number }>),
+
   prompt: (patientId: number) => fetch(`/api/patients/${patientId}/prompt`).then(json<PromptStatus>),
 
   /** Demo: "Send today's prompt now", so the video does not wait for a random time. */
