@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { api, type PatientDetail, type PatientSummary } from '../lib/api'
 
-const LEVEL_LABEL = ['Stabil', 'Følg med', 'Ta kontakt', 'Krise']
-const BASELINE_LABEL = { building: 'Bygger baseline', active: 'Baseline aktiv' } as const
-const DRIVER_LABEL = { anchored: 'glidning fra frisk normal', rolling: 'brå endring' } as const
+const LEVEL_LABEL = ['Stable', 'Watch', 'Contact', 'Crisis']
+const BASELINE_LABEL = { building: 'Building baseline', active: 'Baseline active' } as const
+const DRIVER_LABEL = { anchored: 'drift from healthy normal', rolling: 'abrupt change' } as const
 
 export default function ClinicianView() {
   const [patients, setPatients] = useState<PatientSummary[]>([])
@@ -16,18 +16,18 @@ export default function ClinicianView() {
   }, [])
 
   async function baselineAction(id: number, action: 'start' | 'reject') {
-    const note = action === 'reject' ? 'Underkjent av behandler' : 'Ny baseline startet av behandler'
+    const note = action === 'reject' ? 'Rejected by clinician' : 'New baseline started by clinician'
     await api.baselineAction(id, action, { note })
     load()
   }
 
   return (
     <section className="view">
-      <h1>Pasienter</h1>
+      <h1>Patients</h1>
       {error && <p className="error">{error}</p>}
       <table className="patients">
         <thead>
-          <tr><th>Navn</th><th>Status</th><th>S</th><th>Hvorfor</th><th>Baseline</th><th>Trend (14 d)</th></tr>
+          <tr><th>Name</th><th>Status</th><th>S</th><th>Why</th><th>Baseline</th><th>Trend (14 d)</th></tr>
         </thead>
         <tbody>
           {patients.map((p) => (
@@ -38,8 +38,8 @@ export default function ClinicianView() {
               <td className="muted">{p.driver ? DRIVER_LABEL[p.driver] : '—'}</td>
               <td onClick={(e) => e.stopPropagation()}>
                 <span className="muted">{p.baseline_status ? BASELINE_LABEL[p.baseline_status] : '—'}</span>{' '}
-                <button className="link" onClick={() => baselineAction(p.id, 'start')}>ny</button>{' '}
-                <button className="link" onClick={() => baselineAction(p.id, 'reject')}>underkjenn</button>
+                <button className="link" onClick={() => baselineAction(p.id, 'start')}>new</button>{' '}
+                <button className="link" onClick={() => baselineAction(p.id, 'reject')}>reject</button>
               </td>
               <td className="muted">{p.trend.map((s) => s.toFixed(1)).join(' · ') || '—'}</td>
             </tr>
@@ -49,14 +49,14 @@ export default function ClinicianView() {
 
       {selected && (
         <div className="card">
-          <h2>Hvorfor? – {String(selected.patient.name)}</h2>
-          {/* TODO(A, lør): trendgraf + topp-3 bidragende trekk visualisert */}
+          <h2>Why? – {String(selected.patient.name)}</h2>
+          {/* TODO: trend chart + top-3 contributing features visualised */}
           <ol>
             {selected.top_features.map((f) => (
               <li key={f.branch + f.feature}>{f.branch}/{f.feature}: {f.contribution > 0 ? '+' : ''}{f.contribution}</li>
             ))}
           </ol>
-          <p className="muted">{selected.checkins.length} innsjekker registrert</p>
+          <p className="muted">{selected.checkins.length} check-ins recorded</p>
         </div>
       )}
     </section>

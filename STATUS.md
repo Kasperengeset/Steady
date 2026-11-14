@@ -1,317 +1,331 @@
 # STATUS – Beyond the Clinic
 
-> Levende dokument: hva som er bygget, hva vi har lært om modellen, hvilke valg vi har tatt og hvorfor, og hva som gjenstår.
-> **Oppdater denne når noe endres.** Detaljert opprinnelig plan: [`docs/plan.md`](docs/plan.md). Siste oppdatering: lør 14.11.2026 (branch `acoustic-model`).
+> Living document: what is built, what we have learned about the model, which decisions we made and why, and what is left.
+> **Update this whenever something changes.** Original plan: [`docs/plan.md`](docs/plan.md). Last update: Sat 14 Nov 2026 (branch `acoustic-model`).
 
-## Kjernebudskap
+## Core message
 
-*Vi diagnostiserer ikke. Vi starter når pasienten er frisk etter TMS, og oppdager når hen glir tilbake – målt mot sin egen friske normal, ikke mot et populasjonssnitt.*
-
----
-
-## 1. Arkitektur – tre grener, én motor
-
-| Gren | Når | Datasett for vekter | Status |
-|---|---|---|---|
-| **Akustikk** | brukeren *snakker* innsjekken | Androids Corpus | ✅ trent, i bruk |
-| **Tekst** | brukeren *skriver* dagbok | eget tekstdatasett (teamet) | ⏳ plassholder – **tilfeldige tall** |
-| **Helse** | daglig, automatisk | Fitbit / Google Health (kandidat: Depresjon-datasettet) | ⏳ ikke startet |
-
-Per innsjekk:
-1. Trekk ut tall (features) per gren.
-2. **z-score mot pasientens egen baseline** (siste 14 dager): `z = retning × (i dag − snitt) / sd`.
-3. Delscore per gren: `D_gren = Σ vekt × z / √(Σ vekt²)` (SD 1 når ingenting endres, se B10).
-4. Dagsscore `D_t` = snitt av grenene som har data i dag.
-5. Glatting: `S_t = 0,3·D_t + 0,7·S_(t−1)`.
-6. Eskalering: venner ved S > 1 i 3 dager · behandler ved S > 2 · umiddelbart ved krise-flagg.
-7. Tiltak velges med Thompson-sampling (bandit) og lærer av tilbakemelding om kvelden.
-
-Vekter per gren ligger i `backend/app/engine/weights/<gren>.json`. Mangler fila, brukes litteraturens retning og like vekter.
+*We do not diagnose. We start when the patient is well after TMS and detect when they drift back – measured against their own healthy normal, not a population average.*
 
 ---
 
-## 2. Akustikk-modellen
+## 1. Architecture – three branches, one engine
 
-### Trekk (8)
-| Trekk | Kilde | Metode | Hva det måler |
+| Branch | When | Dataset for weights | Status |
 |---|---|---|---|
-| `speech_rate` | openSMILE eGeMAPS | FFT-basert | stemte segmenter/s (≈ stavelser/s) |
-| `f0_std` | openSMILE | FFT (grunntone i halvtoner) | tonevariasjon (monotoni) |
-| `pause_ratio` | openSMILE | stemt/ustemt | andel ustemt tid (pauser + ustemte konsonanter) |
-| `energy` | openSMILE | FFT, hørselsbånd | lydstyrke |
-| `jitter` | openSMILE | tidsdomene, periode for periode | ujevn tonehøyde |
-| `shimmer` | openSMILE | tidsdomene | ujevn amplitude |
-| `arousal` | wav2vec2 (audEERING) | nevralt nett på rå lydbølge, **ingen FFT** | hvor energisk stemmen høres ut |
-| `valence` | wav2vec2 | samme | hvor positiv stemmen høres ut |
+| **Acoustic** | the user *speaks* the check-in | Androids Corpus | ✅ trained, in use |
+| **Text** | the user *writes* a diary entry | team's own text dataset | ⏳ placeholder – **random numbers** (see T2) |
+| **Health** | daily, automatic | Fitbit / Google Health (candidate: Depresjon dataset) | ⏳ not started |
 
-openSMILE og wav2vec2 er **ferdige verktøy som ikke trenes**. Det eneste vi trener, er den logistiske regresjonen som vekter de 8 tallene.
+Per check-in:
+1. Extract features per branch.
+2. **z-scores against the patient's own baselines** – two tracks (see §3 «Healthy baseline»): `z = direction × (today − centre) / scale`.
+3. Branch score: `D_branch = Σ w·z / √(wᵀ R w)`, where R is the within-person correlation measured on the corpus → D has SD 1 when nothing changes (B10, B12).
+4. Daily score `D_t` = mean over branches with data today.
+5. Smoothing: `S_t = 0.3·D_t + 0.7·S_(t−1)`, per track; **S = max(S_anchored, S_rolling)**.
+6. Escalation: friends at S > 1 for 3 days · clinician at S > 2 · immediately on the crisis flag.
+7. Interventions are chosen with Thompson sampling (bandit) and learn from evening feedback.
 
-### Trening
-- **Data:** Androids Corpus, intervjuklipp. 866 klipp med merkelapp → median per person → **114 talere (62 deprimerte / 52 friske)**. 2 talere med ukjent tilstand er droppet.
-- **Modell:** standardisering → L2-regularisert logistisk regresjon. C velges med indre kryssvalidering på **log-loss**.
-- **Validering:** korpusets egen `fold-lists.csv` med 5 folds, der samme person aldri er i både trening og test.
-- **Vekter:** `|β|` normalisert til sum 1. Retning = `sign(β)`.
+Weights per branch live in `backend/app/engine/weights/<branch>.json`. If the file is missing, literature directions and equal weights are used.
 
-### Resultater (AUC, snitt ± sd over 5 folds)
-| Modell | AUC | Brukes i appen? |
+---
+
+## 2. Acoustic model
+
+### ⭐ Current model (as used by the app)
+
+**Equal weights (0.125 each), literature directions, D normalised with the within-person correlation** (`acoustic.json`, decision B12).
+
+| Feature | Source | Weight | "Worse" when … | Typical shift with depression (within-person SD) | Share of D in a full relapse |
+|---|---|---|---|---|---|
+| `arousal` | wav2vec2 | 0.125 | lower | −1.42 | **27 %** |
+| `energy` | openSMILE | 0.125 | lower | −1.19 | **23 %** |
+| `valence` | wav2vec2 | 0.125 | lower | −0.88 | **17 %** |
+| `jitter` | openSMILE | 0.125 | higher | +0.54 | 10 % |
+| `pause_ratio` | openSMILE | 0.125 | higher | +0.44 | 8 % |
+| `speech_rate` | openSMILE | 0.125 | lower | −0.30 | 6 % |
+| `f0_std` | openSMILE | 0.125 | lower | −0.24 | 5 % |
+| `shimmer` | openSMILE | 0.125 | higher | +0.28 | 5 % |
+
+- **Score:** `D = Σ 0.125 · z / 0.450`. 0.450 = √(wᵀRw), the noise of the weighted sum given the measured correlation (it would be 0.354 if the features were independent). A single feature moving 1 SD on its own moves D by 0.28.
+- **What drives the score:** with equal weights, a feature's contribution is decided by how much depression shifts it. **Arousal, energy and valence carry ~2/3 of the signal** without being up-weighted. A full control→patient shift gives **D ≈ 1.5**.
+- **Why equal weights:** on held-out folds four weightings tie (§3 «Change weights»), so the data cannot justify anything finer. The data does support *which* features and *which direction*.
+- **Reference weightings kept in `acoustic.json` (not used):**
+  - classifier: arousal 0.18 · jitter 0.18 · valence 0.17 · energy 0.14 · f0_std 0.13 · shimmer 0.10 · speech_rate 0.07 · pause_ratio 0.04
+  - Fisher (sign-constrained): arousal −1.03 · jitter +0.55 · energy −0.54 · f0_std −0.41 · shimmer +0.39 · valence −0.22 · speech_rate −0.14 · pause_ratio 0
+- ⚠️ `energy` is ~¼ of the signal **and** the feature most sensitive to microphone and distance → recording protocol/quality check (T14) matters before real use.
+
+### Features (8)
+| Feature | Source | Method | What it measures |
+|---|---|---|---|
+| `speech_rate` | openSMILE eGeMAPS | FFT-based | voiced segments/s (≈ syllables/s) |
+| `f0_std` | openSMILE | FFT (pitch in semitones) | pitch variation (monotony) |
+| `pause_ratio` | openSMILE | voiced/unvoiced | share of unvoiced time (pauses + unvoiced consonants) |
+| `energy` | openSMILE | FFT, auditory bands | loudness |
+| `jitter` | openSMILE | time domain, period by period | pitch irregularity |
+| `shimmer` | openSMILE | time domain | amplitude irregularity |
+| `arousal` | wav2vec2 (audEERING) | neural net on the raw waveform, **no FFT** | how energetic the voice sounds |
+| `valence` | wav2vec2 | same | how positive the voice sounds |
+
+openSMILE and wav2vec2 are **off-the-shelf tools that are not trained**. The only thing we fit is on top of the 8 numbers.
+
+### Training and validation
+- **Data:** Androids Corpus, interview clips. 866 labelled clips → median per speaker → **114 speakers (62 depressed / 52 controls)**. 2 speakers with unknown condition dropped.
+- **Classifier (validation of the features):** standardisation → L2 logistic regression, C chosen by inner CV on **log-loss**. The corpus' own `fold-lists.csv`, 5 folds, no speaker in both train and test.
+- **Change-detection weights:** `ml/change_weights.py` – within-speaker covariance from ~5 clips per speaker; compares weightings on held-out folds (B12).
+
+### Results (AUC, mean ± SD over 5 folds)
+| Model | AUC | Used in the app? |
 |---|---|---|
-| **Våre 8 trekk** | **0,77 ± 0,08** | ✅ |
-| Alle 88 eGeMAPS | 0,88 ± 0,06 | referanse |
-| wav2vec2-representasjon (1024 → PCA 20) | 0,91 ± 0,06 | referanse |
-| Bare kjønn + alder | 0,48 | sjekk for juksesignal ✅ |
+| **Our 8 features** | **0.77 ± 0.08** | ✅ (features + directions) |
+| All 88 eGeMAPS | 0.88 ± 0.06 | reference |
+| wav2vec2 embedding (1024 → PCA 20) | 0.91 ± 0.06 | reference |
+| Gender + age only | 0.48 | confound check ✅ |
 
-Første modellversjon (C valgt etter AUC):
-- bare openSMILE-trekkene: 0,76
-- bare wav2vec2-trekkene: 0,73
-- begge: 0,76 (de overlapper mye)
+First model version (C chosen by AUC): openSMILE features only 0.76, wav2vec2 features only 0.73, both 0.76 (they overlap a lot).
 
-### Gjeldende vekter i appen (`acoustic.json`) – endret 14.11, se B12
-**Like vekter (0,125 hver), litteraturens retninger, og D normalisert med samvariasjonen innen person.**
-- Vi testet fire vektinger på holdt-ute folds (like vekter, klassifikator, følsomhet per trekk, Fisher). Alle ga samme resultat innenfor støyen (se «Vekter for endring»), så vi bruker den enkleste.
-- Klassifikatorvektene (`arousal` 0,18 · `jitter` 0,18 · `valence` 0,17 · …) ligger fortsatt i `acoustic.json["classifier"]` som referanse.
-- Data støtter **hvilke trekk** og **hvilken retning**, men ikke finjusterte vekter.
-- Alle retninger stemmer med litteraturen. `pause_ratio` snur fortegn i samlede modeller (kollinearitet, B6).
-
-### Kjente svakheter og sjekker
-- **Mellom- vs. innen-person:** klassifikatoren er trent på forskjeller *mellom* personer, men brukes til endring *innen* én person. Vektene er en prior, og baselinen er kjernen.
-- **Opptaksforhold:** deprimerte har lengre klipp (median 18,6 s mot 10,5 s) og ~2 dB svakere lyd.
-  - Lengde alene gir AUC 0,64, men hjelper nesten ikke når den legges til trekkene (0,76 → 0,77). Trekkene er altså ikke bare et mål på lengde.
-  - Lydstyrke alene gir 0,68. Uten `energy` faller AUC bare til 0,74.
-- **Mikrofon:** `energy` avhenger av mikrofon og avstand. Telefonopptak ligger rundt 98-persentilen i korpuset. Vurder lavere vekt i appen.
-- **wav2vec2-referansen (0,91)** kan delvis fange mikrofon og rom. Bruk **0,77** som det ærlige tallet utad.
-- **Språk:** korpuset er italiensk. Prosodi overføres rimelig mellom språk, og innholdet tas av tekst-grenen.
-- **Lisens:** både Androids og audEERING-modellen er kun for ikke-kommersiell bruk.
+### Known weaknesses and checks
+- **Between- vs within-person:** the classifier learns differences *between* people; the app tracks change *within* one person. The corpus gives a prior; the personal baseline is the core.
+- **Recording conditions:** depressed speakers have longer clips (median 18.6 s vs 10.5 s) and ~2 dB quieter audio.
+  - Duration alone gives AUC 0.64 but barely helps on top of the features (0.76 → 0.77), so the features are not just a duration proxy.
+  - Loudness alone gives 0.68. Without `energy`, AUC only drops to 0.74.
+- **Microphone:** `energy` depends on mic and distance. Phone recordings sit around the corpus' 98th percentile.
+- **The wav2vec2 reference (0.91)** may partly capture mic and room. Use **0.77** as the honest external number.
+- **Language:** the corpus is Italian. Prosody transfers reasonably across languages; content is handled by the text branch.
+- **Licence:** both Androids and the audEERING model are non-commercial only.
 
 ---
 
-## 3. Viktige konsepter (ting vi har diskutert)
+## 3. Key concepts (things we have discussed)
 
-### Hva modellen er – og ikke er
-**Ett enkelt klipp gir nesten ingenting brukbart alene.**
-- **I appen** gir ett klipp bare 8 trekk-verdier. Score (`S`) kommer først når det finnes nok tidligere innsjekker å sammenligne med.
-- **`ml/score_clip.py`** gir `P(depresjonslignende stemme)` mot korpuset. AUC 0,77 betyr riktig rangering av et tilfeldig par deprimert/frisk 77 % av gangene, men for én person er feilmarginen stor. Den er trent på italiensk tale, er mikrofonavhengig og er **ingen diagnose**.
+### What the model is – and is not
+**A single clip on its own gives almost nothing usable.**
+- **In the app** one clip only yields 8 feature values. A score (`S`) appears once a healthy baseline exists.
+- **`ml/score_clip.py`** gives `P(depressed-like voice)` against the corpus. AUC 0.77 means a random depressed/healthy pair is ranked correctly 77 % of the time, but for one person the error margin is large. Italian speech, mic-dependent, **not a diagnosis**.
 
-Treningen gir to ting, ingen av dem en prediksjon:
-1. **Validering av måleinstrumentet:** trekkene bærer depresjonssignal på et klinisk korpus (AUC 0,77, alle retninger i tråd med litteraturen).
-2. **Vekter:** hvilke trekk som teller mest når vi måler *endring*.
+Training gives two things, neither of them a prediction:
+1. **Validation of the instrument:** the features carry depression signal on a clinical corpus (AUC 0.77, all directions match the literature).
+2. **Structure for change detection:** directions, within-person noise and correlation.
 
-Det nyttige resultatet er **tidsserien S_t over dager**, ikke det enkelte klippet.
+The useful output is the **time series S_t over days**, not a single clip.
 
-**Ikke vist:** at trente vekter oppdager tilbakefall bedre enn like vekter. Det krever data der samme personer følges gjennom et tilbakefall, og Androids har ett opptak per person.
-**Pitch:** si «trekkene er validert på klinisk korpus», **ikke** «modellen oppdager depresjon med 77 % nøyaktighet».
+**Not shown:** that the system detects relapse in real patients. That needs data following the same people through a relapse; Androids has one session per person.
+**Pitch:** say "the features are validated on a clinical corpus", **not** "the model detects depression with 77 % accuracy".
 
-### Vi måler endring, ikke diagnose
-Appen sammenligner pasienten med seg selv. **Er noen allerede deprimert når vi begynner, blir det baselinen, og vi ser ingen avvik.** Det fungerer likevel for denne oppgaven:
-- Pasientene starter etter **vellykket TMS**, altså i remisjon, og klinikken vet det fra depresjonsscorene under behandlingen.
-- Baselinen er derfor «frisk normal», og vi leter etter **tilbakefall**.
+### We measure change, not diagnosis
+The app compares the patient with themselves. **If someone is already depressed when we start, that becomes the baseline and we see no deviation.** It still fits this challenge:
+- Patients start after **successful TMS**, i.e. in remission, and the clinic knows this from their depression scores during treatment.
+- The baseline is therefore the "healthy normal", and we look for **relapse**.
 
-### Simulatoren (`backend/app/sim/simulator.py`)
-Kjører den **ekte motoren** (`state.py`, `bandit.py`, `escalation.py`, trent `acoustic.json`) på en syntetisk pasient i 70 dager, med én talt innsjekk per dag.
-- Latent depresjon `d_t` i [0, 1] følger en AR(1)-prosess. Et langsomt tilbakefall starter dag 40 og bygger seg opp over ~15 dager.
-- Trekk = personlig forskyvning + `d_t` × (pasientsnitt − kontrollsnitt fra korpuset) + støy. Effektstørrelsene er realistiske, fra Androids (Cohens d 0,2–0,9), og lagres som `feature_stats` i `acoustic.json`.
-- Banditen velger tiltak. Hvert tiltak har en skjult «sann» nytte.
-- API: `POST /api/sim/run` gir én pasient. `GET /api/sim/robustness?seeds=50` gir tall over mange pasienter, og **det er de tallene som skal brukes utad, ikke ett heldig frø.**
-
-**Resultater over 50 syntetiske pasienter, med *målt* støy og samvariasjon fra Androids (oppdatert 14.11):**
-
-Simulatoren bruker nå **de samme funksjonene som appen** (median/MAD, krymping mot korpuset, minst 7 målinger for glidende spor). «Kombinert» = det appen eskalerer på.
-
-| Støy fra dag til dag | Bom, glidende | Bom, fast | **Bom, kombinert (appen)** | Falske alarmer, kombinert (snitt dager) |
-|---|---|---|---|---|
-| ×1,0 (målt innen én økt) | 41/50 | 15/50 | **14/50** | 0,38 |
-| ×1,5 | 41/50 | 26/50 | **25/50** | 0,68 |
-| ×2,0 | 40/50 | 30/50 | **28/50** | 0,74 |
-
-⚠️ **Tidligere tall (0/50 bom) var for optimistiske.** De bygde på en gjettet støy (0,6 × variasjonen mellom personer) og antok uavhengige trekk.
-
-Tolkning:
-- **Den faste baselinen er nødvendig.** Den glidende «spiser» tilbakefallet: 41/50 bom.
-- **Stemmen alene fanger bare omtrent halvparten av tilbakefallene** ved realistisk støy (×1,5–2). Et fullt tilbakefall flytter D bare ~1,6 SD (se «detectability»), og alarmen krever S > 1 i 3 dager. Det trengs:
-  - flere målinger per dag (morgen og kveld, snitt gir støy / √2)
-  - kalibrerte grenser (T12)
-  - tekst- og helsegrenen
-- **Vi oppdager ikke tilbakefall tidligere enn selvrapport** (median ~0 dager). Ikke påstå tidlig varsling i pitchen.
-- **Banditen lærer svakt på 70 dager** (19/50 fant beste tiltak med de gamle innstillingene). Belønningen er maks 0,5, fordi «ble tilstanden bedre?» ikke er koblet inn (T8).
-- **Antakelser** (følger med i API-svaret): målt støy innen én økt × `day_noise_factor`, målt samvariasjon, og selvrapport 4 dager forsinket.
-
-### Svakhet: langsomt tilbakefall glir inn i baselinen ⚠️ → løst med fast «frisk baseline» (T1, bygget 14.11)
-Den glidende baselinen på 14 dager tilpasser seg et tilbakefall som kommer sakte over uker. Med målt støy går 41/50 tilbakefall tapt med den alene, mot 14/50 med fast og glidende kombinert.
-
-### ⭐ Frisk baseline – slik den er bygget (T1)
-**Livsløp:** `building` → (perioden er over og nok innsjekker) → `active` → (en ny låses) → `retired`. Behandleren kan underkjenne: `rejected`, og en ny startes.
-- **Start:** første innsjekk uten baseline starter én automatisk. Behandleren kan starte en ny med `POST /api/patients/{id}/baseline/start` (for eksempel etter ny telefon eller bekreftet remisjon).
-- **Periode:** 14 dager og minst 10 innsjekker (`config.py`: `healthy_period_days`, `healthy_min_checkins`). Kan overstyres per baseline; **demo: `{"period_days": 0, "min_checkins": 3}`**. Er perioden over med for få innsjekker, forlenges den.
-- **Ingen score i perioden.** Pasienten ser «Bygger din normal: dag x av 14». Krise-flagget virker hele tiden.
-- **Lagret per trekk og per tid på døgnet** (`morning` / `evening` / `all`):
-  - senter = median
-  - spredning = MAD-basert SD krympet mot korpusets SD innen person: `σ² = (n·s² + k·s₀²)/(n + k)`, med k = 5
-  - tider på døgnet med for få innsjekker faller tilbake på `all`
-- **To spor per innsjekk:**
-  - `S_anchored` mot frisk baseline fanger glidning
-  - `S_rolling` mot de siste 14 dagene, samme tid på døgnet og minst 7 innsjekker, fanger brå endring
-  - **S = den høyeste av de to**, og behandleren ser hvilken (`driver`)
-- **Fornyes aldri automatisk.** En ny baseline bygges mens den gamle fortsatt brukes, og den gamle pensjoneres først når den nye låses. Underkjent baseline → ingen score før en ny er låst.
-- **Kode:**
-  - `app/baseline.py` (livsløp)
-  - `engine/state.py` (`robust_stats`, `history_stats`, `zscores`)
-  - `routers/checkins.py` (to spor)
+### ⭐ Healthy baseline – how it is built (T1)
+**Lifecycle:** `building` → (period over and enough check-ins) → `active` → (a newer one locks) → `retired`. The clinician can reject: `rejected`, and a new one starts.
+- **Start:** the first check-in without a baseline starts one automatically. The clinician can start a new one with `POST /api/patients/{id}/baseline/start` (e.g. after a new phone or confirmed remission).
+- **Period:** 14 days and at least 10 check-ins (`config.py`: `healthy_period_days`, `healthy_min_checkins`). Overridable per baseline; **demo: `{"period_days": 0, "min_checkins": 3}`**. If the period ends with too few check-ins, it is extended.
+- **No score during the period.** The patient sees "Building your normal: day x of 14". The crisis flag works throughout.
+- **Stored per feature and per slot** (`morning` / `evening` / `all`):
+  - centre = median
+  - scale = MAD-based SD shrunk toward the corpus within-person SD: `σ² = (n·s² + k·s₀²)/(n + k)`, k = 5
+  - slots with too few check-ins fall back to `all`
+- **Two tracks per check-in:**
+  - `S_anchored` vs the healthy baseline catches slow drift
+  - `S_rolling` vs the last 14 days, same slot, ≥ 7 check-ins, catches abrupt change
+  - **S = the higher of the two**, and the clinician sees which (`driver`)
+- **Never re-anchored automatically.** A new baseline builds while the old one keeps scoring; the old one is retired only when the new one locks. Rejected baseline → no score until a new one is locked.
+- **Code:**
+  - `app/baseline.py` (lifecycle)
+  - `engine/state.py` (`robust_stats`, `history_stats`, `zscores`, `branch_deviation`)
+  - `routers/checkins.py` (two tracks)
   - `routers/baselines.py` (API: `GET …/baseline`, `POST …/baseline/start|confirm|reject`)
-  - tester i `backend/tests/test_baseline.py` (`backend/.venv/bin/python -m pytest backend/tests`)
-- ⚠️ **Etter endringer i datamodellen må `data/app.db` slettes** (`create_all` legger ikke til nye kolonner). Det er bare testdata.
+  - tests in `backend/tests/test_baseline.py` (`backend/.venv/bin/python -m pytest backend/tests`)
+- ⚠️ **After data-model changes, delete `data/app.db`** (`create_all` does not add new columns). It only holds test data.
 
-### Hva gir absolutt nivå i stedet for bare endring?
-- Tekst-grenen og krise-flagget (for eksempel «jeg føler meg håpløs»)
-- Korpusmodellen (`ml/score_clip.py`), som er for svak til å stå alene (AUC 0,77, mikrofonavhengig)
-- Et spørreskjema innimellom (for eksempel PHQ-9 annenhver uke) som klinisk anker
+### Simulator (`backend/app/sim/simulator.py`)
+Runs the **real engine** (same functions as the app, trained `acoustic.json`) on a synthetic patient for 70 days, one spoken check-in per day.
+- Latent depression `d_t` in [0, 1] follows an AR(1) process. A slow relapse starts on day 40 and builds over ~15 days.
+- Features = personal offset + `d_t` × (patient mean − control mean from the corpus) + noise. Noise uses the **measured** within-person SD and correlation from Androids, × `day_noise_factor`.
+- The bandit picks interventions; each has a hidden "true" helpfulness.
+- API: `POST /api/sim/run` gives one patient. `GET /api/sim/robustness?seeds=50` gives numbers over many patients – **use those externally, not one lucky seed.**
 
-### Hvor mange klipp trengs?
-Modellen er **allerede trent** (114 personer). Brukerens egne klipp brukes til å teste og til baseline, ikke til trening.
-- **Test av modellen:** 2–5 klipp i ulike tilstander (engasjert vs. trøtt og flat), med samme mikrofon og avstand, 30–60 s fritt snakk. Sjekk at trekkene beveger seg i riktig retning (`ml/score_clip.py`).
-- **Personlig baseline:** koden krever minst 3, men det er statistisk tynt (et SD-estimat fra 3 målinger er svært usikkert). **~7 er brukbart, ~14 (to uker) er stabilt.** Det passer med perioden for «frisk baseline» etter TMS.
-- **Morgen og kveld** bør ha hver sin baseline, fordi stemmen er systematisk forskjellig gjennom døgnet (T10).
-- **Bedre modell = flere *personer*, ikke flere klipp.** Mange klipp fra én person uten merkelapp hjelper ikke klassifikatoren. Personlige vekter ville krevd måneder med data sammen med depresjonsscore.
-- **Demo:** to uker finnes ikke. Bruk noen opptak, populasjonsnormer (T5) og simulatoren.
+**Results over 50 synthetic patients** ("combined" = what the app escalates on):
 
-### Tale vs. tekst
-Tale går til akustikk-grenen, skrevet dagbok til tekst-grenen. Gemini brukes i tekst- og innholdsdelen.
-
-### Vekter for endring ≠ vekter for klassifisering (målt 14.11)
-Klassifikatoren lærer å skille *personer*. Appen skal oppdage *endring innen person*. Da bør et trekk telle etter hvor mye det endrer seg ved depresjon, sammenlignet med hvor mye det svinger hos samme person: **d innen person = (pasientsnitt − kontrollsnitt) / SD innen person**. Androids har ~5 klipp per person, så dette kan måles:
-
-| Trekk | d innen person | ICC (stabilitet hos samme person) | Vekt i dag (klassifikator) |
-|---|---|---|---|
-| `energy` | **2,13** | 0,89 | 0,14 |
-| `arousal` | **1,88** | 0,85 | 0,18 |
-| `valence` | 1,15 | 0,63 | 0,17 |
-| `jitter` | 0,71 | 0,68 | 0,18 |
-| `pause_ratio` | 0,56 | 0,66 | 0,04 |
-| `speech_rate` | 0,39 | 0,58 | 0,07 |
-| `shimmer` | 0,36 | 0,74 | 0,10 |
-| `f0_std` | 0,30 | 0,64 | 0,13 |
-
-- Medianforholdet mellom variasjon innen og mellom personer er **0,70** (simulatoren antar 0,6).
-- **Forbehold:** klippene er fra samme økt og samme mikrofon, så variasjonen fra dag til dag er større, særlig for `energy`, som avhenger av avstanden til telefonen. Tallene for `energy` og `arousal` er derfor optimistiske.
-- **Oppfølging (B12):** testet på holdt-ute folds slår ingen av vektingene like vekter. Tabellen viser hva som *flytter seg*, men dataene er for små til å finjustere vekter. Se `ml/reports/acoustic/summary.md` del 2.
-
-### Røyktest på egne opptak (14.11, 8 klipp: Kasper og Mahdan, 2 bra og 2 dårlige hver)
-Samme DJI-mikrofon og samme dag. Lyd og trekk fra opptakene er **ikke** lagt i repoet.
-
-**Mot korpuset** (`score_clip.py`, P(depresjonslignende)):
-| | Bra 1 | Bra 2 | Dårlig 1 | Dårlig 2 |
+| Day-to-day noise | Missed, rolling | Missed, anchored | **Missed, combined (app)** | False alarms, combined (mean days) |
 |---|---|---|---|---|
-| Kasper | 0,31 | 0,14 | 0,33 | 0,34 |
-| Mahdan | 0,29 | 0,18 | 0,55 | 0,59 |
+| ×1.0 (measured within one session) | 41/50 | 15/50 | **14/50** | 0.38 |
+| ×1.5 | 41/50 | 26/50 | **25/50** | 0.68 |
+| ×2.0 | 40/50 | 30/50 | **28/50** | 0.74 |
 
-Mahdan skilles, Kasper ikke.
+⚠️ **Earlier numbers (0/50 missed) were too optimistic:** they used a guessed noise level (0.6 × between-person SD) and assumed independent features.
 
-**Mot egen baseline** (snitt av de 2 bra klippene, SD innen person fra korpuset). Bra klipp er målt mot det andre bra klippet:
-| | Bra (normal svingning) | Dårlig 1 / 2, dagens vekter | Dårlig 1 / 2, vekter for endring (T13) |
+Interpretation:
+- **The fixed baseline is essential.** The rolling one "absorbs" a slow relapse (boiling frog): ~41/50 missed on its own.
+- **Voice alone catches only about half of relapses** at realistic noise (×1.5–2). A full relapse moves D only ~1.5 SD and the alarm needs S > 1 for 3 days. Needed:
+  - several measurements per day (morning + evening; averaging gives noise / √2) – T16
+  - calibrated thresholds – T12
+  - the text and health branches
+- **We do not detect relapse earlier than self-report** (median ~0 days). Do not claim early warning in the pitch.
+- **The bandit learns weakly in 70 days** (19/50 found the best intervention with older settings). Reward is capped at 0.5 because "did the state improve?" is not wired in (T8).
+- **Assumptions** (returned by the API): measured within-session noise × `day_noise_factor`, measured correlation, self-report lagging 4 days.
+
+### What gives an absolute level rather than just change?
+- The text branch and the crisis flag (e.g. "I feel hopeless")
+- The corpus model (`ml/score_clip.py`) – too weak to stand alone (AUC 0.77, mic-dependent)
+- An occasional questionnaire (e.g. PHQ-9 every other week) as a clinical anchor
+
+### How many clips are needed?
+The model is **already trained** (114 people). A user's own clips are for testing and for the baseline, not for training.
+- **Testing the model:** 2–5 clips in different states (engaged vs tired and flat), same mic and distance, 30–60 s of free speech. Check the features move in the expected direction (`ml/score_clip.py`).
+- **Personal baseline:** an SD from 3 measurements is very uncertain. **~7 is usable, ~14 (two weeks) is stable** – which matches the healthy period after TMS. The app requires ≥ 10 for the healthy baseline and ≥ 7 for the rolling track, and shrinks the SD toward the corpus value.
+- **Morning and evening** have separate baselines because the voice differs systematically through the day.
+- **A better model = more *people*, not more clips.** Many unlabelled clips from one person do not help the classifier. Personal weights would need months of data paired with depression scores.
+- **Demo:** two weeks do not exist. Use a short demo baseline and the simulator.
+
+### Speech vs text
+Speech goes to the acoustic branch, a written diary to the text branch. Gemini is used in the text/content part.
+
+### Change weights ≠ classification weights (measured 14 Nov)
+The classifier learns to separate *people*. The app needs to detect *change within a person*, so a feature should count by how far depression moves it relative to that person's normal variation: **d_within = (patient mean − control mean) / within-person SD**. Androids has ~5 clips per person, so this can be measured.
+
+First estimate (mean of per-speaker SDs):
+
+| Feature | d_within | ICC (stability within a person) | Classifier weight |
 |---|---|---|---|
-| Kasper | ±2,28 (dagens) / ±1,70 (T13) | 1,85 / 1,91 | **3,34 / 2,96** |
-| Mahdan | ±1,29 / ±0,84 | 3,71 / 4,30 | **4,27 / 4,77** |
+| `energy` | **2.13** | 0.89 | 0.14 |
+| `arousal` | **1.88** | 0.85 | 0.18 |
+| `valence` | 1.15 | 0.63 | 0.17 |
+| `jitter` | 0.71 | 0.68 | 0.18 |
+| `pause_ratio` | 0.56 | 0.66 | 0.04 |
+| `speech_rate` | 0.39 | 0.58 | 0.07 |
+| `shimmer` | 0.36 | 0.74 | 0.10 |
+| `f0_std` | 0.30 | 0.64 | 0.13 |
 
-Funn:
-- **Med dagens vekter skilles ikke Kaspers dårlige klipp fra hans normale svingning**, fordi jitter svinger mye og har stor vekt.
-- **Med T13-vekter skilles begge**: de dårlige klippene ligger ~1,9× (Kasper) og ~5,4× (Mahdan) lenger ute enn den normale svingningen.
-- **Arousal og valens (wav2vec2) bærer signalet** hos begge.
-- Det bekrefter kjernebudskapet: korpusmodellen bommer på Kasper, men egen baseline fanger ham.
+The pooled-covariance version used by `ml/change_weights.py` gives somewhat smaller values (arousal −1.42, energy −1.19, valence −0.88, …; see «Current model»).
 
-Forbehold: n = 2 personer; de dårlige klippene er muligens spilt og dermed overdrevne; samme økt (variasjon over dager er større); SD hentet fra korpuset.
+- Median ratio of within- to between-person variation: **0.70**.
+- **Caveat:** clips come from one session and one mic, so day-to-day variation is larger – especially for `energy`, which depends on phone distance. `energy` and `arousal` numbers are optimistic.
+- **Follow-up (B12):** on held-out folds no weighting beats equal weights:
 
-**Med motoren slik den er nå** (like vekter og normalisering med samvariasjon, B12):
-- Kasper: normal svingning ±1,07, dårlige klipp 0,71 / 0,84 → **ikke skilt**.
-- Mahdan: normal svingning ±0,53, dårlige klipp 1,90 / 2,42 → **skilt**.
+| Weighting | Detectability on held-out speakers (D shift for a full relapse) |
+|---|---|
+| Equal | 1.58 |
+| Classifier (refit per fold) | 1.58 |
+| Per-feature sensitivity | 1.61 |
+| Fisher (sign-constrained) | 1.54 |
 
-Kaspers endring lå mest i arousal og valens, som henger tett sammen. Normaliseringen teller dem nå som ett signal, ikke to. Vi justerer **ikke** vektene etter dette (B13): holdt-ute-testen på 114 personer veier tyngre enn 2 personer.
+Folds range from 0.8 to 3.1, so the differences are noise. Fisher looked best in-sample (1.66) – that was overfitting. Details: `ml/reports/acoustic/summary.md` part 2.
 
-### Forutsetninger for at det skal virke
-En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
-1. **Baselinen trenger 1–2 uker**, ikke én dag (~7–14 innsjekker med hverdager, helg, morgen og kveld).
-2. **Klinikken bekrefter utgangspunktet** (for eksempel MADRS ved avsluttet TMS), fordi remisjon ofte har restsymptomer.
-3. **Stabile opptaksforhold.** Ny telefon, annen avstand eller et støyende rom ser ut som endring. Dette er den største praktiske risikoen (T14).
-4. **Stemmen er ikke spesifikk for depresjon.** Forkjølelse, søvn, alkohol, stress og medisiner gir falske alarmer, så vi trenger flere signalkilder (T3, T4).
-5. **Baselinen eldes.** Den bør fornyes jevnlig, men **bare når frisk tilstand er bekreftet** (for eksempel med PHQ-9). Ellers kommer frosken i gryta tilbake.
-6. **Ikke alle viser depresjon i stemmen.** Effekten er moderat i snitt.
-7. **Pasienten må sjekke inn regelmessig.**
-8. **Simulatortallene bygger på antakelser.** Virkelig ytelse krever en pilot over tid.
+### Smoke test on our own recordings (14 Nov, 8 clips: Kasper and Mahdan, 2 good and 2 bad each)
+Same DJI mic, same day. Audio and features from these recordings are **not** in the repo.
 
-### Forbedringsplan (prioritert)
-1. ~~**T1** fast «frisk baseline»~~ ✅ bygget (se «Frisk baseline – slik den er bygget»). Simulatoren: 41/50 → 14/50 bom.
-2. ~~**T13** vekter for endring~~ ✅ testet: alle vektinger er like gode på holdt-ute data, så appen bruker like vekter (B12). Simulatoren bruker målt støy.
-3. **T14** opptaksprotokoll og kvalitetssjekk:
-   - samme spørsmål, minst 20 s, fast avstand
-   - avvis opptak med lite tale, klipping eller lav signal/støy
-   - lydstyrke relativt til bakgrunnsstøy
-4. ~~**T10** mer robust baseline~~ ✅ median/MAD, morgen og kveld hver for seg, minst 7 for glidende spor.
-5. ~~**T15** samvariasjon mellom trekk~~ ✅ D normaliseres med den målte samvariasjonen innen person (B12). Støyen i D var undervurdert med 27 %.
-6. **T12** kalibrere grensene i simulatoren mot et akseptabelt antall falske alarmer per pasient-måned.
-7. **T3/T4** tekst- og helsegrenen: uavhengige kilder gir den største reelle gevinsten.
-8. Høyere AUC (flere eGeMAPS-trekk, kjønnsnormalisering, lese- og intervjuoppgaven samlet). Minst viktig for produktet.
-9. **Etter hackathon:** pilot over tid med PHQ-9. Det er eneste måte å validere tidlig varsling og lære personlige vekter på.
+**Against the corpus** (`score_clip.py`, P(depressed-like)):
+| | Good 1 | Good 2 | Bad 1 | Bad 2 |
+|---|---|---|---|---|
+| Kasper | 0.31 | 0.14 | 0.33 | 0.34 |
+| Mahdan | 0.29 | 0.18 | 0.55 | 0.59 |
+
+Mahdan is separated, Kasper is not.
+
+**Against their own baseline** (mean of the 2 good clips; within-person SD from the corpus; each good clip compared with the other good clip):
+
+| Engine version | Kasper: normal variation | Kasper: bad 1 / 2 | Mahdan: normal variation | Mahdan: bad 1 / 2 |
+|---|---|---|---|---|
+| Classifier weights, independence assumption | ±2.28 | 1.85 / 1.91 | ±1.29 | 3.71 / 4.30 |
+| Per-feature sensitivity weights | ±1.70 | 3.34 / 2.96 | ±0.84 | 4.27 / 4.77 |
+| **Current engine** (equal weights + correlation, B12) | ±1.07 | **0.71 / 0.84 → not separated** | ±0.53 | **1.90 / 2.42 → separated** |
+
+- Kasper's change was mostly in arousal and valence, which are strongly correlated; the current engine counts them as one signal, not two.
+- **We do not tune weights to these clips (B13):** the held-out test on 114 people outweighs 2 people.
+- Caveats: n = 2; the "bad" clips may have been acted (exaggerated); one session (day-to-day variation is larger); SD taken from the corpus.
+
+### Preconditions for this to work
+A good healthy baseline is **necessary but not sufficient**.
+1. **The baseline needs 1–2 weeks**, not one day (~7–14 check-ins across weekdays, weekend, morning and evening).
+2. **The clinic confirms the starting point** (e.g. MADRS at the end of TMS), since remission often has residual symptoms.
+3. **Stable recording conditions.** A new phone, another distance or a noisy room looks like change. This is the biggest practical risk (T14).
+4. **Voice is not specific to depression.** Colds, sleep, alcohol, stress and medication cause false alarms, so we need more signal sources (T3, T4).
+5. **The baseline ages.** It should be renewed periodically, but **only when a healthy state is confirmed** (e.g. by PHQ-9). Otherwise the boiling frog returns.
+6. **Not everyone shows depression in their voice.** The average effect is moderate.
+7. **The patient must check in regularly.**
+8. **Simulator numbers rest on assumptions.** Real performance needs a longitudinal pilot.
+
+### Improvement plan (prioritised)
+1. ~~**T1** fixed healthy baseline~~ ✅ built. Simulator: 41/50 → 14/50 missed.
+2. ~~**T13** change weights~~ ✅ tested: all weightings tie on held-out data, so the app uses equal weights (B12). The simulator uses measured noise.
+3. **T14** recording protocol and quality check:
+   - same question, ≥ 20 s, fixed distance
+   - reject recordings with little speech, clipping or low SNR
+   - loudness relative to background noise
+4. ~~**T10** more robust baseline~~ ✅ median/MAD, morning and evening separately, ≥ 7 for the rolling track.
+5. ~~**T15** correlation between features~~ ✅ D normalised with the measured within-person correlation (B12). Noise in D had been underestimated by 27 %.
+6. **T16** use morning + evening check-ins together.
+7. **T12** calibrate thresholds in the simulator against an acceptable number of false alarms per patient-month.
+8. **T3/T4** text and health branches: independent sources are the biggest real gain.
+9. Higher AUC (more eGeMAPS features, gender normalisation, reading + interview tasks together). Least important for the product.
+10. **After the hackathon:** a longitudinal pilot with PHQ-9. The only way to validate early warning and learn personal weights.
 
 ---
 
-## 4. Beslutningslogg
+## 4. Decision log
 
-| # | Beslutning | Hvorfor |
+| # | Decision | Why |
 |---|---|---|
-| B1 | Tre grener med hver sin modell og sitt datasett | Ulike signaler og datasett; enklere å utvikle parallelt |
-| B2 | **Ingen korpuslyd sendes til Gemini eller andre API-er** | Androids-lisensen forbyr videredistribusjon |
-| B3 | Google-krav oppfylles med Gemini i tekst-grenen, ikke Vertex for akustikk | M1 med MPS (Apple-GPU) er raskt nok (~0,1 s per 3 s lyd) |
-| B4 | 8 tolkbare trekk, ikke 88 eller wav2vec2-representasjonen | Kan forklares for behandler; mindre fare for å lære mikrofon og rom med 114 personer |
-| B5 | C velges etter log-loss, ikke AUC | AUC bryr seg ikke om skala, så C havnet på 0,001 og alle sannsynligheter ble ~0,5 |
-| B6 | Trekk der fortegnet snur mot litteraturen, beholder litteraturens retning | Snuingen skyldes kollinearitet; for endring innen person vil vi ha den marginale retningen |
-| B7 | Nettleseren konverterer opptak til 16 kHz mono WAV | Backend trenger ikke ffmpeg |
-| B8 | Rå lyd slettes rett etter uttrekk | Personvern |
-| B9 | Samme uttrekkskode i trening (`ml/`) og app (`backend/app/pipeline/`) | Vektene blir gyldige for appens trekk |
-| B10 | Delscore per gren skaleres: `D_b = Σ w·z / √(Σ w²)` | Med vekter som summerer til 1 var D et vektet snitt med SD ≈ 0,36, så eskaleringsgrensene (S > 1, S > 2) ble nesten aldri nådd. Nå er D ~ N(0, 1) når ingenting endrer seg |
-| B11 | Simulatoren bruker den ekte motoren og effektstørrelser fra korpuset | Demoen viser det systemet faktisk gjør; robusthet måles over 50 frø |
-| B12 | **Like vekter + normalisering med samvariasjon innen person** (`ml/change_weights.py`) | På holdt-ute folds ga like vekter 1,58, klassifikator 1,58, følsomhet per trekk 1,61 og Fisher 1,54 (forskyvning i D ved fullt tilbakefall). Variasjonen mellom foldene (0,8–3,1) er mye større, så dataene kan ikke skille vektingene, og vi velger den enkleste. Samvariasjonen *er* målbar og gjør at D har SD 1 (før: 1,27 → for mange falske alarmer) |
-| B13 | Vekter velges **ikke** etter egne testopptak | 2 personer er en test, ikke treningsdata. Å justere vektene til testklippene ser pent ut, men er overtilpasning |
-| B14 | Frisk baseline: låses automatisk etter 14 dager (behandler kan underkjenne), S = den høyeste av fast og glidende, fornyes aldri automatisk | Låsing uten behandler hindrer at appen står stille. «Høyeste av to» fanger både glidning og brå fall (simulatoren: 14/50 bom mot 15/50 for fast alene). Automatisk fornyelse ville gitt frosken i gryta |
-| B15 | Spredning i baselinen = MAD krympet mot korpusets SD innen person (k = 5) | 14–28 målinger gir usikker personlig SD, og én rar dag skal ikke ødelegge baselinen |
+| B1 | Three branches, each with its own model and dataset | Different signals and datasets; easier to develop in parallel |
+| B2 | **No corpus audio is sent to Gemini or any other API** | The Androids licence forbids redistribution |
+| B3 | The Google requirement is met with Gemini in the text branch, not Vertex for acoustics | An M1 with MPS (Apple GPU) is fast enough (~0.1 s per 3 s of audio) |
+| B4 | 8 interpretable features, not 88 or the wav2vec2 embedding | Explainable to clinicians; less risk of learning mic/room with 114 people |
+| B5 | C chosen by log-loss, not AUC | AUC is scale-blind, so C ended at 0.001 and all probabilities were ~0.5 |
+| B6 | Features whose sign flips against the literature keep the literature direction | The flip comes from collinearity; for within-person change we want the marginal direction |
+| B7 | The browser converts recordings to 16 kHz mono WAV | No ffmpeg needed in the backend |
+| B8 | Raw audio is deleted right after feature extraction | Privacy |
+| B9 | Same extraction code in training (`ml/`) and app (`backend/app/pipeline/`) | Weights stay valid for the app's features |
+| B10 | Branch scores are rescaled to unit variance | With weights summing to 1, D was a weighted mean with SD ≈ 0.36, so thresholds (S > 1, S > 2) were almost never reached |
+| B11 | The simulator uses the real engine and corpus effect sizes | The demo shows what the system actually does; robustness measured over 50 seeds |
+| B12 | **Equal weights + normalisation with within-person correlation** (`ml/change_weights.py`) | On held-out folds: equal 1.58, classifier 1.58, per-feature 1.61, Fisher 1.54 (D shift for a full relapse). Fold-to-fold range (0.8–3.1) is far larger, so the data cannot tell weightings apart → simplest wins. The correlation *is* measurable and keeps D at SD 1 (independence gave 1.27 → too many false alarms) |
+| B13 | Weights are **not** chosen from our own test recordings | 2 people are a test, not training data. Tuning to them looks good but is overfitting |
+| B14 | Healthy baseline: locks automatically after 14 days (clinician can reject), S = max(anchored, rolling), never re-anchored automatically | Locking without a clinician keeps the app from stalling. "Max of two" catches both drift and abrupt drops (simulator: 14/50 missed vs 15/50 anchored only). Automatic re-anchoring would bring back the boiling frog |
+| B15 | Baseline scale = MAD shrunk toward the corpus within-person SD (k = 5) | 14–28 measurements give an uncertain personal SD, and one odd day must not ruin the baseline |
 
 ---
 
-## 5. Åpne oppgaver
+## 5. Open tasks
 
-*T-nummer = oppgave her. B-nummer = beslutning i seksjon 4.*
+*T-number = task here. B-number = decision in section 4.*
 
-- [x] **T1** Fast «frisk baseline» i appen, med API, pasient- og behandlervisning, tester og simulator (B14, B15)
-- [ ] **T2** Ved talt innsjekk skal plassholderen for Gemini **ikke** legge tilfeldige tekst-trekk inn i scoren, bare transkripsjon og krise-flagg (`pipeline/__init__.py`)
-- [ ] **T3** Tekst-grenen: trene på teamets tekstdatasett → `weights/text.json`
-- [ ] **T4** Helse-grenen: Fitbit/Google Health-adapter, vekter fra Depresjon-datasettet (aktivitet minutt for minutt, MADRS)
-- [ ] **T5** Populasjonsnormer den første uka, før baselinen er bygget (`state.zscores`)
-- [ ] **T6** Vurder lavere vekt på `energy` på grunn av mikrofonavhengighet
-- [ ] **T7** Kjør leseoppgaven som ekstra kontroll (`--task reading --no-write`)
-- [ ] **T8** Belønningen til banditen: «ble tilstanden bedre?» (`S_{t+1} < S_t`) er ikke koblet inn (`routers/interventions.py`)
-- [x] **T9** Test med egne opptak: 8 klipp fra Kasper og Mahdan (se «Røyktest på egne opptak»)
-- [x] **T10** Minst 7 innsjekker for glidende spor; morgen og kveld hver for seg i begge spor
-- [x] Simulator med den ekte motoren (`sim/simulator.py`, `/api/sim/run`, `/api/sim/robustness`)
-- [ ] **T11** Demo-visning i frontend: slider over dagene, S (glidende vs. fast) mot selvrapport, og hva banditen har lært (typer finnes i `frontend/src/lib/api.ts`)
-- [x] **T13** Vekter for endring testet på holdt-ute data: ingen vekting slår like vekter, så vi bruker like vekter (B12). Simulatoren bruker målt støy og samvariasjon
-- [ ] **T14** Opptaksprotokoll og kvalitetssjekk: lite tale, klipping, signal/støy; lydstyrke relativt til bakgrunnsstøy
-- [x] **T15** D normaliseres med målt samvariasjon innen person (`state.branch_deviation`)
-- [ ] **T16** To innsjekker per dag (morgen og kveld) brukt sammen i scoren: halverer støyvariansen. Test gevinsten i simulatoren
-- [ ] **T12** Kalibrere eskaleringsgrensene: avveining mellom hvor raskt vi oppdager og antall falske alarmer, over mange frø i simulatoren
+- [x] **T1** Fixed healthy baseline in the app, with API, patient/clinician UI, tests and simulator (B14, B15)
+- [ ] **T2** For spoken check-ins the Gemini placeholder must **not** add random text features to the score – only transcript and crisis flag (`pipeline/__init__.py`)
+- [ ] **T3** Text branch: train on the team's text dataset → `weights/text.json`
+- [ ] **T4** Health branch: Fitbit/Google Health adapter, weights from the Depresjon dataset (minute-level activity, MADRS)
+- [ ] **T5** What to show before the healthy baseline is locked (population norms?)
+- [ ] **T6** Consider down-weighting `energy` because of mic dependence
+- [ ] **T7** Run the reading task as an extra check (`--task reading --no-write`)
+- [ ] **T8** Bandit reward: "did the state improve?" (`S_{t+1} < S_t`) is not wired in (`routers/interventions.py`)
+- [x] **T9** Test with our own recordings: 8 clips from Kasper and Mahdan (see «Smoke test»)
+- [x] **T10** ≥ 7 check-ins for the rolling track; morning and evening separately in both tracks
+- [x] Simulator on the real engine (`sim/simulator.py`, `/api/sim/run`, `/api/sim/robustness`)
+- [ ] **T11** Demo view in the frontend: slider over days, S (rolling vs anchored) against self-report, what the bandit learned (types exist in `frontend/src/lib/api.ts`)
+- [x] **T13** Change weights tested on held-out data: none beats equal weights, so equal weights are used (B12). The simulator uses measured noise and correlation
+- [ ] **T14** Recording protocol and quality check: little speech, clipping, SNR; loudness relative to background noise
+- [x] **T15** D normalised with the measured within-person correlation (`state.branch_deviation`)
+- [ ] **T16** Use two check-ins per day (morning + evening) together in the score: halves the noise variance. Measure the gain in the simulator
+- [ ] **T12** Calibrate escalation thresholds: trade-off between detection speed and false alarms, over many simulator seeds
 
 ---
 
-## 6. Kjøre
+## 6. Running
 
 ```bash
 # app
 cd backend && .venv/bin/uvicorn app.main:app --reload     # :8000/docs
 cd frontend && npm run dev                                # :5173
+backend/.venv/bin/python -m pytest backend/tests          # engine + baseline tests
 
-# akustikk-modellen
-bash ml/download_androids.sh                              # 3,7 GB → data/androids/ (godtar lisensen)
-backend/.venv/bin/python ml/extract_features.py           # ~15 min på M1, kan avbrytes og fortsette
+# acoustic model
+bash ml/download_androids.sh                              # 3.7 GB → data/androids/ (accepts the licence)
+backend/.venv/bin/python ml/extract_features.py           # ~15 min on an M1, resumable
 backend/.venv/bin/python ml/train_weights.py              # → weights/acoustic.json + ml/reports/acoustic/
-backend/.venv/bin/python ml/score_clip.py <fil.m4a>       # test et eget opptak mot korpuset
+backend/.venv/bin/python ml/score_clip.py <file.m4a>      # score your own recording against the corpus
 ```
 
-| Hva | Hvor |
+| What | Where |
 |---|---|
-| Rapporter og figurer | `ml/reports/acoustic/` (`roc.png`, `coefficients.png`, `summary.md`) |
-| Data | `data/` er gitignored og må **aldri** committes |
+| Reports and figures | `ml/reports/acoustic/` (`roc.png`, `coefficients.png`, `summary.md`) |
+| Data | `data/` is gitignored and must **never** be committed |

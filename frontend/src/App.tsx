@@ -14,9 +14,9 @@ export default function App() {
         </Routes>
       </main>
       <nav className="tabs">
-        <NavLink to="/" end>Pasient</NavLink>
-        <NavLink to="/clinician">Behandler</NavLink>
-        <NavLink to="/friends">Venner</NavLink>
+        <NavLink to="/" end>Patient</NavLink>
+        <NavLink to="/clinician">Clinician</NavLink>
+        <NavLink to="/friends">Friends</NavLink>
       </nav>
     </BrowserRouter>
   )

@@ -38,13 +38,13 @@ export default function PatientView() {
       <div className="segmented" role="tablist">
         {(['morning', 'evening'] as const).map((s) => (
           <button key={s} role="tab" aria-selected={slot === s} onClick={() => setSlot(s)}>
-            {s === 'morning' ? 'Morgen' : 'Kveld'}
+            {s === 'morning' ? 'Morning' : 'Evening'}
           </button>
         ))}
       </div>
 
       <p className="prompt">
-        {slot === 'morning' ? 'Hvordan sov du, og hvordan kjennes dagen ut?' : 'Hvordan har dagen vært?'}
+        {slot === 'morning' ? 'How did you sleep, and how does the day feel?' : 'How has your day been?'}
       </p>
 
       <button
@@ -53,55 +53,55 @@ export default function PatientView() {
         disabled={busy}
         aria-label={rec.recording ? 'Stopp opptak' : 'Start opptak'}
       >
-        {busy ? '…' : rec.recording ? `${secs}s` : 'Snakk'}
+        {busy ? '…' : rec.recording ? `${secs}s` : 'Speak'}
       </button>
-      <p className="hint">{rec.recording ? 'Trykk igjen for å stoppe' : 'Ca. 20 sekunder'}</p>
+      <p className="hint">{rec.recording ? 'Tap again to stop' : 'About 20 seconds'}</p>
 
       {(error || rec.error) && <p className="error">{error || rec.error}</p>}
 
       {result?.crisis && (
         <div className="card crisis">
-          <strong>Du er ikke alene.</strong> Behandleren din er varslet. Trenger du hjelp nå, ring 112.
+          <strong>You are not alone.</strong> Your clinician has been notified. If you need help now, call 112.
         </div>
       )}
 
       {result?.baseline.status === 'building' && (
         <div className="card">
-          <h2>Bygger din normal</h2>
+          <h2>Building your normal</h2>
           <p>
-            Dag {Math.min(Math.floor(result.baseline.days_elapsed) + 1, result.baseline.period_days)} av {result.baseline.period_days} ·{' '}
-            {result.baseline.checkins.morning + result.baseline.checkins.evening} innsjekker
+            Day {Math.min(Math.floor(result.baseline.days_elapsed) + 1, result.baseline.period_days)} of {result.baseline.period_days} ·{' '}
+            {result.baseline.checkins.morning + result.baseline.checkins.evening} check-ins
           </p>
-          <p className="muted">De første ukene lærer appen hvordan du høres ut når du har det bra. Etterpå sammenligner vi med det.</p>
+          <p className="muted">For the first weeks the app learns how you sound when you are well. After that we compare with it.</p>
         </div>
       )}
 
       {result && (
         <div className="card">
-          <h2>Dagens tiltak</h2>
+          <h2>Today's activity</h2>
           <p className="intervention">{result.intervention.label}</p>
           {slot === 'evening' && feedbackSent === null && (
             <div className="feedback">
-              <p>Fikk du gjort det? Hvor nyttig var det?</p>
+              <p>Did you do it? How helpful was it?</p>
               <div className="rating">
                 {[1, 2, 3, 4, 5].map((n) => (
                   <button key={n} onClick={() => sendFeedback(true, n)}>{n}</button>
                 ))}
               </div>
-              <button className="link" onClick={() => sendFeedback(false, null)}>Ble ikke gjort</button>
+              <button className="link" onClick={() => sendFeedback(false, null)}>Didn't do it</button>
             </div>
           )}
-          {feedbackSent !== null && <p className="muted">Takk! Registrert.</p>}
+          {feedbackSent !== null && <p className="muted">Thanks! Saved.</p>}
         </div>
       )}
 
       {result && (
         <details className="debug">
-          <summary>Debug: trekk og tilstand</summary>
-          <p>S = {result.state.S?.toFixed(2) ?? '— (bygger baseline)'} · nivå {result.state.level}
-            {result.state.driver && ` · drevet av ${result.state.driver === 'anchored' ? 'frisk baseline' : 'siste 14 dager'}`}</p>
-          <p>Frisk baseline: {result.state.S_anchored?.toFixed(2) ?? '—'} · Siste 14 dager: {result.state.S_rolling?.toFixed(2) ?? '—'}</p>
-          <p>Grener: {Object.entries(result.state.branches).map(([b, d]) => `${b} ${d.toFixed(2)}`).join(' · ') || '—'}</p>
+          <summary>Debug: features and state</summary>
+          <p>S = {result.state.S?.toFixed(2) ?? '— (building baseline)'} · level {result.state.level}
+            {result.state.driver && ` · driven by ${result.state.driver === 'anchored' ? 'healthy baseline' : 'last 14 days'}`}</p>
+          <p>Healthy baseline: {result.state.S_anchored?.toFixed(2) ?? '—'} · Last 14 days: {result.state.S_rolling?.toFixed(2) ?? '—'}</p>
+          <p>Branches: {Object.entries(result.state.branches).map(([b, d]) => `${b} ${d.toFixed(2)}`).join(' · ') || '—'}</p>
           <ul>
             {result.features.map((f) => (
               <li key={f.name}>{f.source}/{f.name}: {f.value}</li>

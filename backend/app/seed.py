@@ -4,12 +4,12 @@ from .db import engine
 from .models import Arm, Contact, ContactKind, Patient
 
 ARMS = [
-    ("walk_outside", "Tur ute"),
-    ("call_friend", "Ring en venn"),
-    ("morning_light", "Morgenlys"),
-    ("music", "Musikkøkt"),
-    ("breathing", "Pusteøvelse"),
-    ("small_task", "Liten aktivitetsoppgave"),
+    ("walk_outside", "Walk outside"),
+    ("call_friend", "Call a friend"),
+    ("morning_light", "Morning light"),
+    ("music", "Music session"),
+    ("breathing", "Breathing exercise"),
+    ("small_task", "Small activity task"),
 ]
 
 

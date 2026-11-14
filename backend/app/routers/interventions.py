@@ -18,7 +18,7 @@ def feedback(body: FeedbackIn, s: Session = Depends(get_session)) -> FeedbackOut
     ).first()
     if log is None:
         raise HTTPException(404, "no intervention for that day")
-    # TODO(B, lør): state_improved = S_{t+1} < S_t, needs next day's score (delayed reward)
+    # TODO: state_improved = S_{t+1} < S_t, needs next day's score (delayed reward)
     r = bandit.reward(body.completed, body.rating, state_improved=None)
     log.completed, log.rating, log.reward = body.completed, body.rating, r
     arm = s.exec(select(Arm).where(Arm.patient_id == body.patient_id, Arm.key == log.arm_key)).one()

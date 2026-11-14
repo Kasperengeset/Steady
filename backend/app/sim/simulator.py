@@ -30,12 +30,12 @@ TRACKS = ("rolling", "anchored", "combined")
 K = settings.sd_prior_strength
 
 ARMS = {  # key: (label, hidden true helpfulness for this persona)
-    "walk_outside": ("Tur ute", 0.75),
-    "call_friend": ("Ring en venn", 0.65),
-    "morning_light": ("Morgenlys", 0.45),
-    "music": ("Musikkøkt", 0.40),
-    "breathing": ("Pusteøvelse", 0.30),
-    "small_task": ("Liten aktivitetsoppgave", 0.55),
+    "walk_outside": ("Walk outside", 0.75),
+    "call_friend": ("Call a friend", 0.65),
+    "morning_light": ("Morning light", 0.45),
+    "music": ("Music session", 0.40),
+    "breathing": ("Breathing exercise", 0.30),
+    "small_task": ("Small activity task", 0.55),
 }
 
 
