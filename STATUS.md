@@ -163,6 +163,31 @@ Klassifikatoren lærer å skille *personer*. Appen skal oppdage *endring innen p
 - Medianforholdet mellom variasjon innen og mellom personer er **0,70** (simulatoren antar 0,6).
 - **Forbehold:** klippene er fra samme økt og samme mikrofon, så variasjonen fra dag til dag er større, særlig for `energy`, som avhenger av avstanden til telefonen. Tallene for `energy` og `arousal` er derfor optimistiske.
 
+### Røyktest på egne opptak (14.11, 8 klipp: Kasper og Mahdan, 2 bra og 2 dårlige hver)
+Samme DJI-mikrofon og samme dag. Lyd og trekk fra opptakene er **ikke** lagt i repoet.
+
+**Mot korpuset** (`score_clip.py`, P(depresjonslignende)):
+| | Bra 1 | Bra 2 | Dårlig 1 | Dårlig 2 |
+|---|---|---|---|---|
+| Kasper | 0,31 | 0,14 | 0,33 | 0,34 |
+| Mahdan | 0,29 | 0,18 | 0,55 | 0,59 |
+
+Mahdan skilles, Kasper ikke.
+
+**Mot egen baseline** (snitt av de 2 bra klippene, SD innen person fra korpuset). Bra klipp er målt mot det andre bra klippet:
+| | Bra (normal svingning) | Dårlig 1 / 2, dagens vekter | Dårlig 1 / 2, vekter for endring (T13) |
+|---|---|---|---|
+| Kasper | ±2,28 (dagens) / ±1,70 (T13) | 1,85 / 1,91 | **3,34 / 2,96** |
+| Mahdan | ±1,29 / ±0,84 | 3,71 / 4,30 | **4,27 / 4,77** |
+
+Funn:
+- **Med dagens vekter skilles ikke Kaspers dårlige klipp fra hans normale svingning**, fordi jitter svinger mye og har stor vekt.
+- **Med T13-vekter skilles begge**: de dårlige klippene ligger ~1,9× (Kasper) og ~5,4× (Mahdan) lenger ute enn den normale svingningen.
+- **Arousal og valens (wav2vec2) bærer signalet** hos begge.
+- Det bekrefter kjernebudskapet: korpusmodellen bommer på Kasper, men egen baseline fanger ham.
+
+Forbehold: n = 2 personer; de dårlige klippene er muligens spilt og dermed overdrevne; samme økt (variasjon over dager er større); SD hentet fra korpuset.
+
 ### Forutsetninger for at det skal virke
 En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
 1. **Baselinen trenger 1–2 uker**, ikke én dag (~7–14 innsjekker med hverdager, helg, morgen og kveld).
