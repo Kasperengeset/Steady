@@ -39,6 +39,8 @@ If the screens update but Appie returns Not Found, an older backend process is s
 
 The synthetic seed script creates four demo profiles, a circle, custom hobbies and earned food through the real API. It refuses to replace an existing database without explicit `--reset`. Never reset real patient data for a demo.
 
+`scripts/seed_demo.py` retains Kasper's prompt-aware demo. `scripts/seed_health_demo.py` additionally supplies the wearable history, health branch, custom hobbies and Appie treats. Both use separate synthetic data when no local Fitbit history is supplied.
+
 ## Validation
 
 Run `python -m pytest -q -p no:cacheprovider` from `backend`. The test configuration clears the Gemini key, disables warm-up and live sync, creates a temporary database, and aborts if that isolation changes. Run `node --test scripts/test-recording.mjs scripts/test-push.mjs` and `npm.cmd run build` from `frontend`.

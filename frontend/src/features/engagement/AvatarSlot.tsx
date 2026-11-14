@@ -6,12 +6,14 @@ export type AvatarState = 'calm' | 'happy' | 'celebrating' | 'resting' | 'glad'
 export default function AvatarSlot({
   name,
   level,
+  tier,
   state = 'calm',
   colour,
   size = 56,
 }: {
   name: string
   level?: number | null
+  tier?: number
   state?: AvatarState
   colour?: string | null
   size?: number
@@ -23,7 +25,7 @@ export default function AvatarSlot({
       role="img"
       aria-label={`${name}'s avatar${level ? `, level ${level}` : ''}`}
     >
-      <span aria-hidden style={{ display: 'block', width: size, height: size }}><Appie name={name} mood={{ calm: 'calm', happy: 'happy', celebrating: 'celebrate', resting: 'sleep', glad: 'wave' }[state]} tier={level && level >= 5 ? 3 : level && level >= 3 ? 2 : 1} className="h-full w-full" /></span>
+      <span aria-hidden style={{ display: 'block', width: size, height: size }}><Appie name={name} mood={{ calm: 'calm', happy: 'happy', celebrating: 'celebrate', resting: 'sleep', glad: 'wave' }[state]} tier={tier || (level && level >= 5 ? 3 : level && level >= 3 ? 2 : 1)} className="h-full w-full" /></span>
       {level ? <span className="avatar-level">{level}</span> : null}
       {state === 'resting' && <span className="avatar-badge" aria-hidden>z</span>}
       {(state === 'celebrating' || state === 'glad') && <span className="avatar-badge" aria-hidden>✦</span>}

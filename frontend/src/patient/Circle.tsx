@@ -12,7 +12,7 @@ function CircleBoard({ feed, presets, busy, send }: { feed: CircleFeed; presets:
     {feed.reach_out_cards.map((card) => <p key={card.to_member_id} className="rounded-3xl bg-sand p-5 text-sm">{card.message}</p>)}
     <div className="grid grid-cols-2 gap-3">{feed.members.map((m) => <section key={m.member_id} className={`relative rounded-[1.75rem] p-4 text-center ${m.is_you ? 'border border-primary/15 bg-sage-soft/45' : 'bg-surface-low'}`}>
       {m.is_you && <span className="absolute right-3 top-2 text-[10px] font-semibold uppercase tracking-wider text-primary">You</span>}
-      {m.photo_url ? <img src={m.photo_url} alt={`${m.name}'s chosen profile photo`} className="mx-auto my-4 h-24 w-24 rounded-full object-cover" referrerPolicy="no-referrer" /> : m.avatar ? <Appie name={m.avatar.name || 'Appie'} className="mx-auto h-32 w-full" /> : <span className="mx-auto my-4 grid h-24 w-24 place-items-center rounded-full bg-sand text-3xl font-semibold text-primary" aria-hidden>{m.emoji || m.name.slice(0, 1)}</span>}
+      {m.photo_url ? <img src={m.photo_url} alt={`${m.name}'s chosen profile photo`} className="mx-auto my-4 h-24 w-24 rounded-full object-cover" referrerPolicy="no-referrer" /> : m.avatar ? <Appie name={m.avatar.name || 'Appie'} tier={m.avatar.tier || 1} className="mx-auto h-32 w-full" /> : <span className="mx-auto my-4 grid h-24 w-24 place-items-center rounded-full bg-sand text-3xl font-semibold text-primary" aria-hidden>{m.emoji || m.name.slice(0, 1)}</span>}
       <h2 className="mt-1 truncate text-sm font-semibold">{m.name}</h2>
       {m.emoji && (m.avatar || m.photo_url) && <p className="mt-1 text-lg">{m.emoji}</p>}
       {m.level !== null && <p className="mt-1 text-[11px] text-ink-soft">Level {m.level}</p>}

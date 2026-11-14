@@ -23,6 +23,8 @@ Raw audio is deleted right after feature extraction. Full plan: [`docs/plan.md`]
 
 ## Run locally
 
+The combined patient app keeps the sage-and-sand design and Appie artwork, with the shared backend's phrase checks, local reminders, push, social consent, rewards and scoring. See [Appie integration and testing](docs/APPIE.md). On Windows, `scripts/run_local.ps1` starts the frontend and backend together from the same checkout.
+
 ```bash
 # backend (Python 3.13)
 cd backend

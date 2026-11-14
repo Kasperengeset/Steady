@@ -11,7 +11,7 @@ export interface CircleSummary {
 export interface CircleMember {
   member_id: number; role: 'patient' | 'friend'; name: string; is_you: boolean
   photo_url: string | null; emoji: string | null
-  avatar: { patient_id: number; name?: string | null; colour?: string | null; items_json?: string | null } | null
+  avatar: { patient_id: number; name?: string | null; colour?: string | null; items_json?: string | null; tier?: number } | null
   level: number | null; streak: number | null; checked_in_today: boolean | null
 }
 export interface CircleFeed {
@@ -53,6 +53,7 @@ export const community = {
   react: (token: string, to_member_id: number, kind: string) => communityRequest<{ ok: boolean }>('/circles/react', 'POST', { token, to_member_id, kind }),
   cancelNudge: (pid: number) => communityRequest<{ ok: boolean }>(patient(pid, '/circle/nudge/cancel'), 'POST'),
   prompt: (pid: number) => communityRequest<PromptStatus>(patient(pid, '/prompt')),
+  promptNow: (pid: number) => communityRequest<PromptStatus>(patient(pid, '/prompt/now'), 'POST'),
   promptSettings: (pid: number, body: { tz?: string; quiet_start?: string | null; quiet_end?: string | null; enabled?: boolean; pause_today?: boolean }) => communityRequest<PromptStatus>(patient(pid, '/prompt/settings'), 'PUT', body),
   push: (pid: number) => communityRequest<PushStatus>(patient(pid, '/push')),
   subscribe: (pid: number, subscription: PushSubscriptionJSON) => communityRequest<PushStatus>(patient(pid, '/push/subscribe'), 'POST', subscription),

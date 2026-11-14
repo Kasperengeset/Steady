@@ -5,6 +5,8 @@
 
 ## Core message
 
+Appie UI and health integration, 14 Nov 2026: branch `mahda/appie-integration` combines the patient screens and generated Appie artwork with Kasper's latest main, including the daily-moment, engagement frontend, push UI, demo and escalation-clock merges. Canonical rewards, per-item social consent, local-time prompts, phrase reading checks, B30/B31 scoring and exact clinical explanations are retained. The additional health branch and Google Health sync are integrated through the same state engine and wallet. Setup and verification details are in [`docs/APPIE.md`](docs/APPIE.md).
+
 *We do not diagnose. We start when the patient is well after TMS and detect when they drift back – measured against their own healthy normal, not a population average.*
 
 ---

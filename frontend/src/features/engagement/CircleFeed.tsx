@@ -41,6 +41,7 @@ export default function CircleFeed({ token }: { token: string }) {
                     name={m.avatar?.name || m.name}
                     colour={m.avatar?.colour}
                     level={m.level}
+                    tier={m.avatar?.tier}
                     state={m.checked_in_today ? 'happy' : 'calm'}
                     size={44}
                   />
