@@ -175,6 +175,9 @@ def main() -> None:
         clips, feats, LITERATURE, weights, dict(zip(spk["speaker"], folds.tolist())), cls_fold_w
     )
     det = change["detectability"]["held_out_mean"]
+    if clips.groupby("speaker").size().max() < 2:
+        print("  ⚠️  one clip per speaker: within-person SD, correlation and detectability are undefined (nan). "
+              "For the reading task use --features data/features/reading_chunks_clips.csv (ml/voice/reading_vs_interview.py)")
     print("  change weights (app):", change["weights"])
     print("  detectability held-out (D shift for full relapse, noise SD = 1):",
           ", ".join(f"{k} {v:.2f}" for k, v in det.items()))
