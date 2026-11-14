@@ -48,7 +48,7 @@ def _logreg() -> LogisticRegressionCV:
     # C (regularisation) chosen by inner CV on the training part of each outer fold
     return LogisticRegressionCV(
         Cs=np.logspace(-3, 2, 12), cv=StratifiedKFold(4, shuffle=True, random_state=0),
-        scoring="roc_auc", class_weight="balanced", max_iter=5000,
+        scoring="neg_log_loss", class_weight="balanced", max_iter=5000,  # log-loss → calibrated probabilities (AUC is scale-blind)
         l1_ratios=(0.0,), use_legacy_attributes=False,  # pure L2
     )
 
@@ -156,11 +156,15 @@ def main() -> None:
     beta = final[-1].coef_[0]
     total = np.abs(beta).sum() or 1.0
     weights = {f: round(float(abs(b) / total), 4) for f, b in zip(feats, beta)}
-    direction = {f: int(np.sign(b)) or LITERATURE[f] for f, b in zip(feats, beta)}
-    disagree = [f for f in feats if direction[f] != LITERATURE[f]]
+    trained_dir = {f: int(np.sign(b)) or LITERATURE[f] for f, b in zip(feats, beta)}
+    disagree = [f for f in feats if trained_dir[f] != LITERATURE[f]]
+    # A sign flip in the multivariate fit is usually collinearity (the feature's unique share given
+    # correlated ones), not evidence that the marginal effect is reversed. For within-person change we
+    # want the marginal direction, so flipped features keep the literature direction (weights stay small).
+    direction = {f: LITERATURE[f] if f in disagree else trained_dir[f] for f in feats}
     print("  weights:", weights)
     if disagree:
-        print("  ⚠️  direction contradicts literature for:", disagree)
+        print("  ⚠️  multivariate sign contradicts literature for:", disagree, "→ keeping literature direction")
 
     payload = {
         "branch": "acoustic",
@@ -219,7 +223,7 @@ def write_reports(results: dict, y: np.ndarray, feats: list[str], beta: np.ndarr
         f"| {labels.get(k, k)} | {r['mean']:.3f} ± {r['std']:.3f} | {r['pooled']:.3f} |" for k, r in results.items()
     )
     coef_rows = "\n".join(
-        f"| `{f}` | {b:+.3f} | {payload['weights'][f]:.3f} | {'⚠️ differs' if f in payload['literature_disagreements'] else 'agrees'} |"
+        f"| `{f}` | {b:+.3f} | {payload['weights'][f]:.3f} | {'⚠️ sign flips (collinearity) – literature direction kept' if f in payload['literature_disagreements'] else 'agrees'} |"
         for f, b in sorted(zip(feats, beta), key=lambda t: -abs(t[1]))
     )
     (out / "summary.md").write_text(f"""# Acoustic branch – training summary

@@ -1,14 +1,14 @@
 {
   "branch": "acoustic",
   "weights": {
-    "speech_rate": 0.0673,
-    "f0_std": 0.06,
-    "pause_ratio": 0.0844,
-    "energy": 0.1747,
-    "jitter": 0.128,
-    "shimmer": 0.0669,
-    "arousal": 0.2043,
-    "valence": 0.2143
+    "speech_rate": 0.0717,
+    "f0_std": 0.1261,
+    "pause_ratio": 0.035,
+    "energy": 0.1377,
+    "jitter": 0.1759,
+    "shimmer": 0.1037,
+    "arousal": 0.1771,
+    "valence": 0.1728
   },
   "direction": {
     "speech_rate": -1,
@@ -21,37 +21,39 @@
     "valence": -1
   },
   "beta_standardised": {
-    "speech_rate": -0.0068,
-    "f0_std": -0.0061,
-    "pause_ratio": 0.0086,
-    "energy": -0.0177,
-    "jitter": 0.013,
-    "shimmer": 0.0068,
-    "arousal": -0.0207,
-    "valence": -0.0218
+    "speech_rate": -0.1272,
+    "f0_std": -0.2237,
+    "pause_ratio": -0.062,
+    "energy": -0.2442,
+    "jitter": 0.3119,
+    "shimmer": 0.184,
+    "arousal": -0.3141,
+    "valence": -0.3066
   },
-  "C": 0.001,
+  "C": 0.0657933224657568,
   "auc": {
-    "mean": 0.762,
-    "std": 0.073,
+    "mean": 0.77,
+    "std": 0.076,
     "per_fold": [
       0.659,
-      0.792,
-      0.723,
+      0.825,
+      0.731,
       0.878,
       0.758
     ],
-    "pooled": 0.722
+    "pooled": 0.743
   },
   "auc_reference": {
-    "egemaps88": 0.857,
+    "egemaps88": 0.877,
     "demographics": 0.475,
-    "wav2vec2_probe": 0.897
+    "wav2vec2_probe": 0.905
   },
-  "literature_disagreements": [],
+  "literature_disagreements": [
+    "pause_ratio"
+  ],
   "n_speakers": 114,
   "n_depressed": 62,
   "trained_on": "androids_interview",
   "folds": "corpus fold-lists.csv (100% of speakers)",
-  "trained_at": "2026-11-14T08:08:15+00:00"
+  "trained_at": "2026-11-14T08:26:43+00:00"
 }
