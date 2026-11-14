@@ -33,7 +33,10 @@ export default function ClinicianView() {
           {patients.map((p) => (
             <tr key={p.id} onClick={() => api.patient(p.id).then(setSelected)}>
               <td>{p.name}</td>
-              <td><span className={`level l${p.level}`}>{LEVEL_LABEL[p.level]}</span></td>
+              <td>
+                <span className={`level l${p.level}`}>{LEVEL_LABEL[p.level]}</span>
+                {p.elevated && <span className="level elevated" title="Unusually elevated vs healthy normal – clinician only"> elevated</span>}
+              </td>
               <td>{p.S?.toFixed(2) ?? '—'}</td>
               <td className="muted">{p.driver ? DRIVER_LABEL[p.driver] : '—'}</td>
               <td onClick={(e) => e.stopPropagation()}>
@@ -50,12 +53,30 @@ export default function ClinicianView() {
       {selected && (
         <div className="card">
           <h2>Why? – {String(selected.patient.name)}</h2>
-          {/* TODO: trend chart + top-3 contributing features visualised */}
-          <ol>
-            {selected.top_features.map((f) => (
-              <li key={f.branch + f.feature}>{f.branch}/{f.feature}: {f.contribution > 0 ? '+' : ''}{f.contribution}</li>
-            ))}
-          </ol>
+          {selected.explanation ? (
+            <>
+              <p>{selected.explanation.sentence}</p>
+              <p className="muted">
+                S = {selected.explanation.S.toFixed(2)} ({selected.explanation.track === 'anchored' ? 'vs healthy normal' : 'vs last 14 days'}),
+                split exactly over features and days:
+              </p>
+              <ul className="bars">
+                {Object.entries(selected.explanation.by_feature).slice(0, 5).map(([f, v]) => (
+                  <li key={f}>
+                    <span className="bar-label">{f}</span>
+                    <span className={`bar ${v > 0 ? 'worse' : 'better'}`} style={{ width: `${Math.min(Math.abs(v) * 60, 100)}%` }} />
+                    <span className="muted">{v > 0 ? '+' : ''}{v.toFixed(2)}</span>
+                  </li>
+                ))}
+              </ul>
+              <p className="muted">
+                Last days: {selected.explanation.by_day.slice(-5).map((d) => `${d.date.slice(5)} ${d.contribution > 0 ? '+' : ''}${d.contribution.toFixed(2)}`).join(' · ')}
+                {Math.abs(selected.explanation.older) > 0.01 && ` · older ${selected.explanation.older.toFixed(2)}`}
+              </p>
+            </>
+          ) : (
+            <p className="muted">No score yet – the healthy baseline is still being built.</p>
+          )}
           <p className="muted">{selected.checkins.length} check-ins recorded</p>
         </div>
       )}

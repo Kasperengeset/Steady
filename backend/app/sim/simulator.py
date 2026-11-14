@@ -24,7 +24,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..config import settings
-from ..engine import bandit, escalation, state
+from ..engine import bandit, escalation, relapse, state
 
 TRACKS = ("rolling", "anchored", "combined")
 K = settings.sd_prior_strength
@@ -62,6 +62,9 @@ def simulate(
     self_report_lag: int = 4,
     baseline_days: int = 14,
     checkins_per_day: int = 1,
+    elevated_day: int | None = None,
+    elevated_len: int = 10,
+    relapse_params: "relapse.Params | None" = None,
 ) -> dict:
     rng = random.Random(seed)
     model = state.load_branch("acoustic")
@@ -83,13 +86,16 @@ def simulate(
     history: list[dict[str, float]] = []
     out = []
     S_roll = S_anch = None
+    post: dict[str, float] | None = None  # relapse model posterior (engine/relapse.py)
     anchor: dict[str, list[float]] | None = None
 
     for t in range(days):
         # --- latent course -------------------------------------------------------------
         ramp = min(1.0, max(0.0, (t - relapse_day) / relapse_len))
         target = 0.1 + 0.75 * ramp
-        d = min(1.0, max(0.0, 0.7 * d + 0.3 * target + rng.gauss(0, 0.04)))
+        if elevated_day is not None and elevated_day <= t < elevated_day + elevated_len:
+            target = -0.75  # elevated episode: voice shifts the opposite way (energetic, positive)
+        d = min(1.0, max(-1.0, 0.7 * d + 0.3 * target + rng.gauss(0, 0.04)))
 
         # --- spoken check-ins → features (morning, evening, ...) -------------------------
         xs = []
@@ -118,6 +124,8 @@ def simulate(
                 D_anchs.append(state.branch_deviation(z_anch, model))
         D_roll = state.combine_checkins(D_rolls) if D_rolls else None
         D_anch = state.combine_checkins(D_anchs) if D_anchs else None
+        if D_anch is not None:  # same evidence the app uses: anchored D, combined over the day's check-ins
+            post = relapse.step(post, {"acoustic": D_anch}, {"acoustic": len(D_anchs)}, prm=relapse_params).posterior
         if D_roll is not None:
             S_roll = state.ewma(D_roll, S_roll, 0.3)
         if D_anch is not None:
@@ -154,6 +162,9 @@ def simulate(
             "level_rolling": escalation.evaluate_level(recent_roll, False) if S_roll is not None else 0,
             "level_anchored": escalation.evaluate_level(recent_anch, False) if S_anch is not None else 0,
             "S_combined": None if S_comb is None else round(S_comb, 3),
+            "D_anchored": None if D_anch is None else round(D_anch, 4),
+            "p_relapse": None if post is None else round(post["relapse"], 4),
+            "p_elevated": None if post is None else round(post["elevated"], 4),
             "level_combined": escalation.evaluate_level(recent_comb, False) if S_comb is not None else 0,
             "arm": arm.key,
             "completed": completed,

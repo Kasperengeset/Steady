@@ -76,7 +76,9 @@ class StateScore(SQLModel, table=True):
     driver: str | None = None  # "anchored" | "rolling" – which track set S
     baseline_version: int | None = None
     top_features_json: str = "[]"
-    branch_scores_json: str = "{}"  # {"anchored": {"acoustic": D_b, ...}, "rolling": {...}}
+    branch_scores_json: str = "{}"  # {"anchored": {"acoustic": [D per check-in], ...}, "rolling": {...}}
+    evidence_json: str = "{}"  # {"anchored": {"acoustic": {feature: Σ share over today's check-ins}}, ...} (B20)
+    elevated: bool = False  # unusually elevated vs healthy normal – clinician only (B21)
 
 
 class BaselineStatus(str, Enum):

@@ -112,6 +112,7 @@ export default function PatientView() {
           <p>S = {result.state.S?.toFixed(2) ?? '— (building baseline)'} · level {result.state.level}
             {result.state.driver && ` · driven by ${result.state.driver === 'anchored' ? 'healthy baseline' : 'last 14 days'}`}</p>
           <p>Healthy baseline: {result.state.S_anchored?.toFixed(2) ?? '—'} · Last 14 days: {result.state.S_rolling?.toFixed(2) ?? '—'}</p>
+          {result.state.explanation && <p>{result.state.explanation.sentence}</p>}
           <p>Branches: {Object.entries(result.state.branches).map(([b, d]) => `${b} ${d.toFixed(2)}`).join(' · ') || '—'}</p>
           <ul>
             {result.features.map((f) => (

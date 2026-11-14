@@ -134,6 +134,20 @@ def _corr(model: BranchModel, a: str, b: str) -> float:
     return r * model.direction.get(a, 1) * model.direction.get(b, 1)
 
 
+def _norm(keys: list[str], model: BranchModel) -> float:
+    w = {k: model.weights.get(k, 0.0) for k in keys}
+    var = sum(w[a] * w[b] * _corr(model, a, b) for a in keys for b in keys)
+    return var**0.5 if var > 0 else 0.0
+
+
+def feature_shares(z: dict[str, float], model: BranchModel) -> dict[str, float]:
+    """How much of D each feature explains: w_i·z_i / √(wᵀRw). The shares sum exactly to D."""
+    norm = _norm(list(z), model)
+    if norm == 0:
+        return {k: 0.0 for k in z}
+    return {k: model.weights.get(k, 0.0) * v / norm for k, v in z.items()}
+
+
 def branch_deviation(z: dict[str, float], model: BranchModel) -> float:
     """Weighted sum of z-scores, rescaled to unit variance under 'no change' (STATUS.md B10, B12).
 
@@ -143,12 +157,7 @@ def branch_deviation(z: dict[str, float], model: BranchModel) -> float:
     fixed meaning even though e.g. energy and arousal move together. Without a correlation matrix the
     features are treated as independent (norm = sqrt(sum w^2)).
     """
-    keys = list(z)
-    w = {k: model.weights.get(k, 0.0) for k in keys}
-    var = sum(w[a] * w[b] * _corr(model, a, b) for a in keys for b in keys)
-    if var <= 0:
-        return 0.0
-    return sum(w[k] * z[k] for k in keys) / var**0.5
+    return sum(feature_shares(z, model).values())
 
 
 def combine_checkins(values: list[float]) -> float:

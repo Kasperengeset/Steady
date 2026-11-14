@@ -17,3 +17,9 @@ def evaluate_level(recent_S: list[float], crisis: bool) -> int:
     if len(recent_S) >= 3 and all(s > 1 for s in recent_S[-3:]):
         return 1
     return 0
+
+
+def elevated_flag(recent_S_anchored: list[float], threshold: float, days: int) -> bool:
+    """Unusually elevated vs the healthy normal (possible hypomania): S_anchored below −threshold for
+    `days` scored days in a row. Shown to the clinician only – never to friends (STATUS.md B21)."""
+    return len(recent_S_anchored) >= days and all(x < -threshold for x in recent_S_anchored[-days:])
