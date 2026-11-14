@@ -42,12 +42,18 @@ Do these once per clone:
 git config core.hooksPath scripts/git-hooks   # pre-commit hook: blocks .env, keys, data and audio
 cp .env.example .env                          # then paste GEMINI_API_KEY into .env (gitignored)
 backend/.venv/bin/python scripts/check_gemini.py   # tests the key without printing it
+backend/.venv/bin/python scripts/check_transcribe.py my_recording.m4a   # transcribe your own voice + text score
+backend/.venv/bin/python scripts/check_transcribe.py --diary            # TTS → transcribe → score the diary set
 ```
+
+**Transcription** (`backend/app/pipeline/llm.py`): with a key in `.env`, every spoken check-in is transcribed by `gemini-3.5-transcribe` in verbatim mode (keeps "um" and repetitions), English, audio sent inline (no 48-hour Files API copy), `store=False`. The transcript feeds the text branch and the crisis phrase check. Without a key, or if the call fails, the check-in still works on the voice features alone.
 
 - The key lives only in `.env`. Never in code, the frontend (Vite `VITE_*` variables are shipped to the browser), a commit, an issue or a chat. All Gemini calls go through the backend.
 - Every Gemini call passes `store=False`: Gemini stores requests by default, and diaries are health data.
 - Never send Androids Corpus audio to Gemini or any other API (licence, STATUS.md B2). Test with our own recordings.
-- If a key ever reaches GitHub: revoke it in AI Studio at once, then clean the history. Deleting the file in a new commit is not enough.
+- If a key ever reaches GitHub: delete it at aistudio.google.com/api-keys at once and create a new one, then clean the history. Deleting the file in a new commit is not enough. (The hackathon kills every key in the project if one leaks.)
+- **Hackathon account** (goo.gle/hackathon-account): use the API key from the team's temporary project; each of us puts their own copy in their own `.env`. The account is deleted the day after the hackathon, so record the demo video before then. Without a key the app still runs (voice features + the local text model on written diaries); only transcription needs Gemini.
+- Keep usage hackathon-sized: tests use a fake client, and the simulator must never call Gemini (50 patients × 70 days would be thousands of requests). 503 = model overloaded (transcription retries twice); 429 = spend cap, raise it at aistudio.google.com/spend.
 
 ## Repo layout
 

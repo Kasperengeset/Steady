@@ -1,12 +1,14 @@
 """Text branch (pipeline/text.py) and the written-diary endpoint, on the real exported model."""
 
 import csv
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import SQLModel
 
+from app import baseline as baseline_mod
 from app import db
 from app import pipeline
 from app.main import app
@@ -53,30 +55,122 @@ def test_crisis_phrases(text, expected):
     assert tp.analyze_text(text)["crisis"] is expected
 
 
-def test_stub_transcript_never_reaches_the_score(monkeypatch):
-    """STATUS.md T2: while llm.analyze is a stub, a spoken check-in adds no llm or text features."""
+@pytest.fixture()
+def no_audio_models(monkeypatch):
+    """Spoken check-in without openSMILE / wav2vec2 – these tests are about the transcript path."""
     monkeypatch.setattr(pipeline.audio, "load", lambda path: None)
     monkeypatch.setattr(pipeline.prosody, "extract_full_signal", lambda x: None)
     monkeypatch.setattr(pipeline.prosody, "from_full", lambda full: {"speech_rate": 2.0})
     monkeypatch.setattr(pipeline.emotion, "run_signal", lambda x: (None, {"arousal": 0.5, "valence": 0.5}))
-    res = pipeline.extract_features("unused.wav")
+
+
+class FakeGemini:
+    """Stands in for google-genai; records the request, never touches the network."""
+
+    def __init__(self, transcript=None, error=None):
+        self.transcript, self.error, self.calls = transcript, error, []
+        self.interactions = self
+
+    def create(self, **kw):
+        self.calls.append(kw)
+        if self.error:
+            raise self.error
+        return type("R", (), {"output_text": self.transcript})()
+
+
+def spoken(monkeypatch, tmp_path, fake, key="test-key"):
+    monkeypatch.setattr(pipeline.llm.settings, "gemini_api_key", key)
+    monkeypatch.setattr(pipeline.llm, "_client", lambda: fake)
+    wav = tmp_path / "checkin.wav"
+    wav.write_bytes(b"RIFF....WAVE")
+    return pipeline.extract_features(str(wav))
+
+
+def test_no_key_uses_stub_and_nothing_reaches_the_score(monkeypatch, tmp_path, no_audio_models):
+    """STATUS.md T2: without a key the stub is used, and a stub adds no llm or text features."""
+    fake = FakeGemini("should not be called")
+    res = spoken(monkeypatch, tmp_path, fake, key="")
     sources = {src for _, _, src in res.features}
     assert FeatureSource.llm not in sources and FeatureSource.text not in sources
-    assert res.crisis is False
+    assert fake.calls == [] and res.crisis is False
+
+
+def test_transcript_feeds_the_text_branch(monkeypatch, tmp_path, no_audio_models):
+    fake = FakeGemini(ENTRIES["low_1"])
+    res = spoken(monkeypatch, tmp_path, fake)
+    assert res.transcript == ENTRIES["low_1"]
+    assert {n for n, _, src in res.features if src == FeatureSource.text} == {
+        "text_logit", "absolutist", "first_person", "sentiment"}
+    call = fake.calls[0]  # privacy and mode settings actually sent
+    assert call["store"] is False
+    assert call["model"] == "gemini-3.5-transcribe"
+    assert call["generation_config"]["transcription_config"] == {
+        "language_codes": ["en-US"], "mode": {"type": "verbatim"}}
+    assert call["input"][0]["type"] == "audio" and call["input"][0]["mime_type"] == "audio/wav"
+
+
+def test_crisis_phrase_in_transcript_flags(monkeypatch, tmp_path, no_audio_models):
+    res = spoken(monkeypatch, tmp_path, FakeGemini("um I just, I keep thinking about ending my life"))
+    assert res.crisis is True
+
+
+def test_api_failure_falls_back_to_stub(monkeypatch, tmp_path, no_audio_models):
+    res = spoken(monkeypatch, tmp_path, FakeGemini(error=RuntimeError("503 unavailable")))
+    assert FeatureSource.text not in {src for _, _, src in res.features}
+
+
+def test_retries_when_model_overloaded(monkeypatch, tmp_path, no_audio_models):
+    class FlakyGemini(FakeGemini):
+        def create(self, **kw):
+            self.calls.append(kw)
+            if len(self.calls) == 1:
+                raise RuntimeError("503 UNAVAILABLE: the model is overloaded")
+            return type("R", (), {"output_text": ENTRIES["good_1"]})()
+
+    monkeypatch.setattr(pipeline.llm.time, "sleep", lambda s: None)
+    fake = FlakyGemini()
+    res = spoken(monkeypatch, tmp_path, fake)
+    assert len(fake.calls) == 2 and res.transcript == ENTRIES["good_1"]
+
+
+def test_does_not_retry_spend_cap(monkeypatch, tmp_path, no_audio_models):
+    monkeypatch.setattr(pipeline.llm.time, "sleep", lambda s: None)
+    fake = FakeGemini(error=RuntimeError("429 RESOURCE_EXHAUSTED: spend cap reached"))
+    res = spoken(monkeypatch, tmp_path, fake)
+    assert len(fake.calls) == 1  # no hammering the API; check-in continues on voice alone
+    assert FeatureSource.text not in {src for _, _, src in res.features}
+
+
+def test_refuses_androids_audio(monkeypatch, tmp_path):
+    fake = FakeGemini("x")
+    monkeypatch.setattr(pipeline.llm, "_client", lambda: fake)
+    clip = tmp_path / "data" / "androids" / "01_CF56_1.wav"
+    clip.parent.mkdir(parents=True)
+    clip.write_bytes(b"RIFF")
+    with pytest.raises(ValueError, match="Androids"):
+        pipeline.llm.transcribe(str(clip))
+    assert fake.calls == []
 
 
 # ---------------------------------------------------------------- written diary through the engine
 
 @pytest.fixture()
-def client():
+def client(monkeypatch):
     SQLModel.metadata.drop_all(db.engine)
     db.init_db()
     seed()
-    return TestClient(app)
+    c = TestClient(app)
+    # One diary per day, as in real use (check-ins on the same day are combined, STATUS.md B16)
+    c.day = 0
+    start = datetime.now(timezone.utc) + timedelta(minutes=1)
+    monkeypatch.setattr(baseline_mod, "clock", lambda: start + timedelta(days=c.day))
+    return c
 
 
 def post_text(c, text, slot="evening"):
-    return c.post("/api/checkins/text", json={"patient_id": 1, "slot": slot, "text": text})
+    r = c.post("/api/checkins/text", json={"patient_id": 1, "slot": slot, "text": text})
+    c.day += 1
+    return r
 
 
 def test_written_diary_builds_baseline_then_flags_a_low_day(client):

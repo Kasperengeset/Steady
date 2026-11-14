@@ -342,7 +342,8 @@ A good healthy baseline is **necessary but not sufficient**.
 - [x] **T1** Fixed healthy baseline in the app, with API, patient/clinician UI, tests and simulator (B14, B15)
 - [x] **T2** The Gemini placeholder no longer adds random numbers to the score (`llm.ContentAnalysis.stub`, `pipeline/__init__.py`)
 - [x] **T3** Text branch: `pipeline/text.py`, `weights/text.json`, `POST /api/checkins/text` for written diaries (§2b)
-- [ ] **T3b** Real Gemini transcription (`gemini-3.5-transcribe`, verbatim, `store=False`) → the text branch then runs on spoken check-ins automatically (GitHub issue #3)
+- [x] **T3b** Gemini transcription in `pipeline/llm.py` (`gemini-3.5-transcribe`, verbatim, English, inline audio, `store=False`, retries on 503, refuses Androids paths, falls back to the stub without a key or on error). Live check on the diary set via TTS: words 98–100% right, text score shift 0.016 on average, no label flips (`ml/reports/text/transcript_check.md`)
+- [x] **T3c** Transcript check on our own 8 recordings: all 8 on the right side of 0.5, bad above good for both speakers, the same script read by Kasper and Mahdan differed by ≤ 0.09 (`ml/reports/text/transcript_check.md`). Scripts were shared, so this tests transcription and wording, not delivery
 - [ ] **T4** Health branch: Fitbit/Google Health adapter, weights from the Depresjon dataset (minute-level activity, MADRS) (GitHub issues #5, #10)
 - [ ] **T5** What to show before the healthy baseline is locked (population norms?)
 - [ ] **T6** Consider down-weighting `energy` because of mic dependence
