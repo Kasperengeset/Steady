@@ -146,6 +146,37 @@ Modellen er **allerede trent** (114 personer). Brukerens egne klipp brukes til �
 ### Tale vs. tekst
 Tale går til akustikk-grenen, skrevet dagbok til tekst-grenen. Gemini brukes i tekst- og innholdsdelen.
 
+### Vekter for endring ≠ vekter for klassifisering (målt 14.11)
+Klassifikatoren lærer å skille *personer*. Appen skal oppdage *endring innen person*. Da bør et trekk telle etter hvor mye det endrer seg ved depresjon, sammenlignet med hvor mye det svinger hos samme person: **d innen person = (pasientsnitt − kontrollsnitt) / SD innen person**. Androids har ~5 klipp per person, så dette kan måles:
+
+| Trekk | d innen person | ICC (stabilitet hos samme person) | Vekt i dag (klassifikator) |
+|---|---|---|---|
+| `energy` | **2,13** | 0,89 | 0,14 |
+| `arousal` | **1,88** | 0,85 | 0,18 |
+| `valence` | 1,15 | 0,63 | 0,17 |
+| `jitter` | 0,71 | 0,68 | 0,18 |
+| `pause_ratio` | 0,56 | 0,66 | 0,04 |
+| `speech_rate` | 0,39 | 0,58 | 0,07 |
+| `shimmer` | 0,36 | 0,74 | 0,10 |
+| `f0_std` | 0,30 | 0,64 | 0,13 |
+
+- Medianforholdet mellom variasjon innen og mellom personer er **0,70** (simulatoren antar 0,6).
+- **Forbehold:** klippene er fra samme økt og samme mikrofon, så variasjonen fra dag til dag er større, særlig for `energy`, som avhenger av avstanden til telefonen. Tallene for `energy` og `arousal` er derfor optimistiske.
+
+### Forbedringsplan (prioritert)
+1. **T1** fast «frisk baseline». Simulatoren: 21/50 → 0/50 bom.
+2. **T13** vekter for endring ∝ d innen person (tabellen over). Klassifikatoren brukes bare til retning og validering, og simulatoren får målt støy i stedet for 0,6.
+3. **T14** opptaksprotokoll og kvalitetssjekk:
+   - samme spørsmål, minst 20 s, fast avstand
+   - avvis opptak med lite tale, klipping eller lav signal/støy
+   - lydstyrke relativt til bakgrunnsstøy
+4. **T10** mer robust baseline: median/MAD, morgen og kveld hver for seg, minst ~7 innsjekker.
+5. **T15** ta hensyn til samvariasjon mellom trekk (Mahalanobis), så samme signal ikke telles dobbelt og gir falske alarmer.
+6. **T12** kalibrere grensene i simulatoren mot et akseptabelt antall falske alarmer per pasient-måned.
+7. **T3/T4** tekst- og helsegrenen: uavhengige kilder gir den største reelle gevinsten.
+8. Høyere AUC (flere eGeMAPS-trekk, kjønnsnormalisering, lese- og intervjuoppgaven samlet). Minst viktig for produktet.
+9. **Etter hackathon:** pilot over tid med PHQ-9. Det er eneste måte å validere tidlig varsling og lære personlige vekter på.
+
 ---
 
 ## 4. Beslutningslogg
@@ -180,6 +211,9 @@ Tale går til akustikk-grenen, skrevet dagbok til tekst-grenen. Gemini brukes i 
 - [ ] **T10** Baseline: høyere minimum (~5–7 innsjekker før z-score) og egen baseline for morgen og kveld (`state.zscores`, `_baseline_history`)
 - [x] Simulator med den ekte motoren (`sim/simulator.py`, `/api/sim/run`, `/api/sim/robustness`)
 - [ ] **T11** Demo-visning i frontend: slider over dagene, S (glidende vs. fast) mot selvrapport, og hva banditen har lært (typer finnes i `frontend/src/lib/api.ts`)
+- [ ] **T13** Vekter for endring ∝ d innen person, målt på Androids. Simulatoren skal bruke målt støy (se «Vekter for endring»)
+- [ ] **T14** Opptaksprotokoll og kvalitetssjekk: lite tale, klipping, signal/støy; lydstyrke relativt til bakgrunnsstøy
+- [ ] **T15** Ta hensyn til samvariasjon mellom trekk (Mahalanobis-avstand) for færre falske alarmer
 - [ ] **T12** Kalibrere eskaleringsgrensene: avveining mellom hvor raskt vi oppdager og antall falske alarmer, over mange frø i simulatoren
 
 ---
