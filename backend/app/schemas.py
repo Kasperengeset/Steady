@@ -4,6 +4,8 @@ from datetime import date as Date
 
 from pydantic import BaseModel
 
+from .models import Slot
+
 
 class FeatureOut(BaseModel):
     name: str
@@ -28,6 +30,14 @@ class CheckInResponse(BaseModel):
     state: StateOut
     intervention: InterventionOut
     crisis: bool
+
+
+class TextCheckInIn(BaseModel):
+    """Written diary entry (text branch)."""
+
+    patient_id: int
+    slot: Slot
+    text: str
 
 
 class FeedbackIn(BaseModel):

@@ -36,7 +36,12 @@ DIRECTION: dict[str, dict[str, int]] = {
         "speech_rate": -1, "f0_std": -1, "pause_ratio": +1, "energy": -1,
         "jitter": +1, "shimmer": +1, "arousal": -1, "valence": -1,
     },
-    "text": {"mood": -1, "energy_self": -1, "anhedonia": +1, "social_contact": -1},
+    "text": {
+        # pipeline/text.py (written diary or transcript)
+        "text_logit": +1, "absolutist": +1, "first_person": +1, "sentiment": -1,
+        # Gemini content scores (pipeline/llm.py) – weight 0 in weights/text.json until the stub is replaced
+        "mood": -1, "energy_self": -1, "anhedonia": +1, "social_contact": -1,
+    },
     "health": {"sleep_hours": -1, "hrv_rmssd": -1, "resting_hr": +1, "steps": -1},
 }
 

@@ -1,6 +1,6 @@
 # ml/ – acoustic branch training (Androids Corpus)
 
-The app's state engine has three branches – **acoustic** (spoken check-in), **text** (written diary) and **health** (wearable). This folder trains the acoustic branch's weights.
+The app's state engine has three branches – **acoustic** (spoken check-in), **text** (written diary) and **health** (wearable). This folder trains the acoustic branch's weights. The text branch lives in [`ml/text/`](text/README.md).
 
 **The corpus must never be committed or sent to any external API.** `data/` is gitignored.
 

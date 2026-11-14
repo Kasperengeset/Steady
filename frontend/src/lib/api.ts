@@ -38,6 +38,14 @@ export const api = {
     return fetch('/api/checkins', { method: 'POST', body: fd }).then(json<CheckInResponse>)
   },
 
+  /** Written diary entry – text branch only. English, 50 to 100 words works best. */
+  checkInText: (patientId: number, slot: Slot, text: string) =>
+    fetch('/api/checkins/text', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ patient_id: patientId, slot, text }),
+    }).then(json<CheckInResponse>),
+
   feedback: (patientId: number, date: string, completed: boolean, rating: number | null) =>
     fetch('/api/interventions/feedback', {
       method: 'POST',

@@ -40,11 +40,13 @@ Copy `.env.example` to `.env` and add `GEMINI_API_KEY` when the real pipeline la
 
 | Path | What |
 |---|---|
-| `backend/app/pipeline/` | feature extractors (currently stubs) |
-| `backend/app/engine/` | state engine, bandit, escalation |
+| `backend/app/pipeline/` | feature extractors: prosody + emotion (acoustic), `text.py` (text branch), Gemini (stub) |
+| `backend/app/engine/` | state engine, bandit, escalation; branch weights in `weights/` |
 | `backend/app/routers/` | API – contract in `schemas.py`, mirrored in `frontend/src/lib/api.ts` |
 | `frontend/src/views/` | Patient / Clinician / Friends |
-| `ml/` | weight training on the Androids Corpus (data not in repo) |
+| `ml/` | acoustic branch training on the Androids Corpus (data not in repo) |
+| `ml/text/` | text branch training on the Reddit Mental Health Dataset – see [`ml/text/README.md`](ml/text/README.md) |
+| `ml/download_data.py` | downloads Reddit (text) and Depresjon (health) into `data/` |
 
 ## License
 

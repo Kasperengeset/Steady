@@ -14,7 +14,7 @@
 | Gren | Når | Datasett for vekter | Status |
 |---|---|---|---|
 | **Akustikk** | brukeren *snakker* innsjekken | Androids Corpus | ✅ trent, i bruk |
-| **Tekst** | brukeren *skriver* dagbok | eget tekstdatasett (teamet) | ⏳ plassholder – **tilfeldige tall** |
+| **Tekst** | brukeren *skriver* dagbok, eller transkripsjon av talt innsjekk | Reddit Mental Health Dataset | ✅ trent, i bruk (`pipeline/text.py`, se §2b) |
 | **Helse** | daglig, automatisk | Fitbit / Google Health (kandidat: Depresjon-datasettet) | ⏳ ikke startet |
 
 Per innsjekk:
@@ -79,6 +79,44 @@ Alle retninger stemmer med litteraturen. `pause_ratio` snur fortegn i den samled
 - **wav2vec2-referansen (0,91)** kan delvis fange mikrofon og rom. Bruk **0,77** som det ærlige tallet utad.
 - **Språk:** korpuset er italiensk. Prosodi overføres rimelig mellom språk, og innholdet tas av tekst-grenen.
 - **Lisens:** både Androids og audEERING-modellen er kun for ikke-kommersiell bruk.
+
+---
+
+## 2b. Tekst-modellen (Mahdan)
+
+Detaljer og kjøring: [`ml/text/README.md`](ml/text/README.md). Rapporter: `ml/reports/text/`.
+
+### Trekk (4) + krise-flagg
+| Trekk | Hva | Retning |
+|---|---|---|
+| `text_logit` | log-odds for at teksten ligner r/depression (TF-IDF + logistisk regresjon) | høy = verre |
+| `absolutist` | absolutte ord per 100 ord («alltid», «ingenting», «aldri») | høy = verre |
+| `first_person` | jeg/meg/min per 100 ord | høy = verre |
+| `sentiment` | VADER, −1 til +1 | lav = verre |
+
+Krise-flagget er en fast frase-liste (engelsk og norsk). Det venter aldri på en modell og går rett til behandler.
+
+### Trening
+- **Data:** Reddit Mental Health Dataset, `pre`-vinduet. r/depression mot hverdagsforum (fitness, parenting, personalfinance, meditation, teaching) og «vanskelige» negative (relationships, divorce). 115 814 innlegg, 112 861 forfattere.
+- **Deling på forfatter** 70/15/15 (assert i koden). Innlegg kuttes i biter på 50–100 ord, som en dagbok. 1:1 balanse per del. C velges på validering, test brukes én gang.
+- **Maskering:** forumnavn og behandlingsord (terapi, medisiner, lege, TMS, ECT, legemiddelnavn) fjernes, og ingen bigram krysser et fjernet ord. Pasienter etter TMS nevner behandling også på gode dager.
+- **Samme kode i trening og app** (B9). Modellen eksporteres som JSON og regnes ut i ren Python, uten scikit-learn eller pickle i appen.
+
+### Resultater
+| Modell | F1 | ROC-AUC |
+|---|---|---|
+| **v1, maskert (brukes i appen)** | **0,908** | **0,970** |
+| bare de 3 leksikon-trekkene | 0,715 | 0,790 |
+| v1 + leksikon | 0,909 | 0,970 (ingen gevinst) |
+| grunnlinje | 0,667 | 0,500 |
+
+**Dagbok-sjekk** (10 egne innlegg, hver dårlige dag speiler en god dag): 9 av 10 riktige, og den dårlige dagen scoret høyere enn den gode i 23 av 25 par.
+
+### Kjente svakheter
+- **Sjanger, ikke bare humør.** Modellen gir høy score til personlig tekst om følelser, også på gode dager. Det nyttige er endring mot egen baseline, ikke absolutt nivå.
+- **Skjult lavt humør** («jeg har det fint») lurer sentiment-trekket.
+- **Bare engelsk.** Norsk dagbok krever egen modell eller oversettelse.
+- Vektene (`weights/text.json`) legger nesten alt på `text_logit`. Leksikon-trekkene er med for å forklare scoren for behandler.
 
 ---
 
@@ -236,8 +274,9 @@ En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
 ## 5. Åpne oppgaver
 
 - [ ] **T1 (høyest prioritet)** Fast «frisk baseline» i tillegg til den glidende (`engine/state.py`, `routers/checkins.py`). Simulatoren viser 21/50 bom uten den, 0/50 med.
-- [ ] **T2** Ved talt innsjekk skal plassholderen for Gemini **ikke** legge tilfeldige tekst-trekk inn i scoren, bare transkripsjon og krise-flagg (`pipeline/__init__.py`)
-- [ ] **T3** Tekst-grenen: trene på teamets tekstdatasett → `weights/text.json`
+- [x] **T2** Ved talt innsjekk skal plassholderen for Gemini **ikke** legge tilfeldige tekst-trekk inn i scoren (`llm.ContentAnalysis.stub`, `pipeline/__init__.py`)
+- [x] **T3** Tekst-grenen: `pipeline/text.py`, `weights/text.json`, `POST /api/checkins/text` for skrevet dagbok
+- [ ] **T3b** Ekte Gemini-transkripsjon (ordrett, med «eh» og gjentakelser) → tekst-grenen kjører da automatisk på talte innsjekker
 - [ ] **T4** Helse-grenen: Fitbit/Google Health-adapter, vekter fra Depresjon-datasettet (aktivitet minutt for minutt, MADRS)
 - [ ] **T5** Populasjonsnormer den første uka, før baselinen er bygget (`state.zscores`)
 - [ ] **T6** Vurder lavere vekt på `energy` på grunn av mikrofonavhengighet

@@ -11,6 +11,7 @@ class ContentAnalysis:
     scores: dict[str, float]
     risk: bool
     raw_json: str
+    stub: bool = False  # True while analyze() is a placeholder – its numbers must not reach the score
 
 
 def analyze(audio_path: str) -> ContentAnalysis:
@@ -22,4 +23,4 @@ def analyze(audio_path: str) -> ContentAnalysis:
         "social_contact": float(random.randint(0, 5)),
     }
     payload = {"transcript": "(stub) Jeg sov ok i natt.", **scores, "risk": False}
-    return ContentAnalysis(payload["transcript"], scores, False, json.dumps(payload))
+    return ContentAnalysis(payload["transcript"], scores, False, json.dumps(payload), stub=True)

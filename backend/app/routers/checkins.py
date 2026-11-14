@@ -13,8 +13,8 @@ from ..engine import bandit, escalation, state
 from ..models import (
     Arm, CheckIn, Contact, ContactKind, Escalation, Feature, InterventionLog, Patient, Slot, StateScore,
 )
-from ..pipeline import extract_features
-from ..schemas import CheckInResponse, FeatureOut, InterventionOut, StateOut
+from ..pipeline import PipelineResult, extract_features, extract_text_features
+from ..schemas import CheckInResponse, FeatureOut, InterventionOut, StateOut, TextCheckInIn
 
 router = APIRouter(tags=["checkins"])
 
@@ -67,7 +67,23 @@ async def create_checkin(
         raise HTTPException(400, str(e)) from e
     finally:
         os.remove(tmp_path)
+    return _record_checkin(s, patient, slot, result)
 
+
+@router.post("/checkins/text", response_model=CheckInResponse)
+def create_text_checkin(body: TextCheckInIn, s: Session = Depends(get_session)) -> CheckInResponse:
+    """Written diary entry -> text branch only (no audio). English; 50 to 100 words works best."""
+    patient = s.get(Patient, body.patient_id)
+    if patient is None:
+        raise HTTPException(404, "patient not found")
+    if not body.text.strip():
+        raise HTTPException(400, "empty diary entry")
+    return _record_checkin(s, patient, body.slot, extract_text_features(body.text))
+
+
+def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineResult) -> CheckInResponse:
+    """Store features, run the state engine, escalate, pick today's intervention."""
+    patient_id = patient.id
     now = datetime.now(timezone.utc)
     checkin = CheckIn(
         patient_id=patient_id, ts=now, slot=slot,

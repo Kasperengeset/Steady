@@ -1,0 +1,33 @@
+{
+  "branch": "text",
+  "weights": {
+    "text_logit": 0.9458,
+    "absolutist": 0.0031,
+    "first_person": 0.0257,
+    "sentiment": 0.0254
+  },
+  "direction": {
+    "text_logit": 1,
+    "absolutist": 1,
+    "first_person": 1,
+    "sentiment": -1
+  },
+  "beta_standardised": {
+    "text_logit": 4.1094,
+    "absolutist": -0.0133,
+    "first_person": -0.1116,
+    "sentiment": -0.1104
+  },
+  "fit_on": "Reddit MH validation split (v1 out-of-sample), tested on the v1 test split",
+  "auc": {
+    "v1_alone": 0.9698,
+    "v1_plus_lexicon": 0.97,
+    "lexicon_only": 0.7903
+  },
+  "literature_disagreements": [
+    "absolutist",
+    "first_person"
+  ],
+  "note": "Lexicon features add no accuracy over v1 on Reddit (v1 already uses those words), so text_logit carries almost all weight. They stay in the output to explain the score. Gemini content features (mood, energy_self, anhedonia, social_contact) get weight 0 until the real Gemini call replaces the stub.",
+  "trained_on": "2026-11-14"
+}
