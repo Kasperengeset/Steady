@@ -61,6 +61,7 @@ def simulate(
     day_noise_factor: float = 1.0,
     self_report_lag: int = 4,
     baseline_days: int = 14,
+    checkins_per_day: int = 1,
 ) -> dict:
     rng = random.Random(seed)
     model = state.load_branch("acoustic")
@@ -90,24 +91,33 @@ def simulate(
         target = 0.1 + 0.75 * ramp
         d = min(1.0, max(0.0, 0.7 * d + 0.3 * target + rng.gauss(0, 0.04)))
 
-        # --- spoken check-in → features -------------------------------------------------
-        noise = dict(zip(wc["features"], wsd * (chol @ nrng.standard_normal(len(order)))))
-        x = {
-            f: offset[f] + s["control_mean"] + d * (s["patient_mean"] - s["control_mean"]) + noise[f]
-            for f, s in stats.items()
-        }
+        # --- spoken check-ins → features (morning, evening, ...) -------------------------
+        xs = []
+        for _ in range(checkins_per_day):
+            noise = dict(zip(wc["features"], wsd * (chol @ nrng.standard_normal(len(order)))))
+            xs.append({
+                f: offset[f] + s["control_mean"] + d * (s["patient_mean"] - s["control_mean"]) + noise[f]
+                for f, s in stats.items()
+            })
+        x = xs[0]
 
         # --- engine: rolling baseline (as in the app) and anchored baseline (T1) --------
         # Same functions as the app: median/MAD shrunk toward corpus SD, rolling needs >= rolling_min_n
-        window = history[-baseline_days:]
-        roll_hist = {f: [h[f] for h in window] for f in feats}
-        z_roll = state.zscores(x, state.history_stats(roll_hist, model, K, settings.rolling_min_n), model.direction)
-        if len(history) == baseline_days and anchor is None:  # healthy period over → lock (frozen)
+        window = history[-baseline_days * checkins_per_day:]
+        roll_stats = state.history_stats({f: [h[f] for h in window] for f in feats}, model, K, settings.rolling_min_n)
+        if len(history) == baseline_days * checkins_per_day and anchor is None:  # healthy period over → lock
             anchor = state.history_stats({f: [h[f] for h in history] for f in feats}, model, K, 1)
-        z_anch = state.zscores(x, anchor, model.direction) if anchor else {}
-
-        D_roll = state.branch_deviation(z_roll, model) if z_roll else None
-        D_anch = state.branch_deviation(z_anch, model) if z_anch else None
+        # Each check-in gets its own D; the day combines them per branch with sum/sqrt(n) as the app (B16)
+        D_rolls, D_anchs = [], []
+        for xi in xs:
+            z_roll = state.zscores(xi, roll_stats, model.direction)
+            z_anch = state.zscores(xi, anchor, model.direction) if anchor else {}
+            if z_roll:
+                D_rolls.append(state.branch_deviation(z_roll, model))
+            if z_anch:
+                D_anchs.append(state.branch_deviation(z_anch, model))
+        D_roll = state.combine_checkins(D_rolls) if D_rolls else None
+        D_anch = state.combine_checkins(D_anchs) if D_anchs else None
         if D_roll is not None:
             S_roll = state.ewma(D_roll, S_roll, 0.3)
         if D_anch is not None:
@@ -124,7 +134,7 @@ def simulate(
         self_mood = min(10, max(0, round(7.5 - 5 * d_lag + rng.gauss(0, 0.8))))
 
         # --- intervention loop (real bandit) ---------------------------------------------
-        arm = bandit.choose_arm(arms)
+        arm = bandit.choose_arm(arms, rng)
         true_p = ARMS[arm.key][1]
         completed = rng.random() < (0.85 - 0.5 * d)
         helped = completed and rng.random() < true_p
@@ -134,7 +144,7 @@ def simulate(
         if helped:
             d = max(0.0, d - 0.03)
 
-        history.append(x)
+        history.extend(xs)
         out.append({
             "day": t,
             "latent": round(d, 3),

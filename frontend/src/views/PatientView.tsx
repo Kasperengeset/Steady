@@ -76,6 +76,17 @@ export default function PatientView() {
         </div>
       )}
 
+      {result?.baseline.status === 'active' && result.baseline_building && (
+        <div className="card">
+          <h2>Updating your normal</h2>
+          <p>
+            Day {Math.min(Math.floor(result.baseline_building.days_elapsed) + 1, result.baseline_building.period_days)} of{' '}
+            {result.baseline_building.period_days}
+          </p>
+          <p className="muted">Your previous normal is used meanwhile.</p>
+        </div>
+      )}
+
       {result && (
         <div className="card">
           <h2>Today's activity</h2>

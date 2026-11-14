@@ -20,6 +20,11 @@ from ..schemas import BaselineOut, CheckInResponse, FeatureOut, InterventionOut,
 router = APIRouter(tags=["checkins"])
 
 
+def _now() -> datetime:
+    """Current time from the shared clock in baseline.py (tests replace it to advance days)."""
+    return baseline.clock()
+
+
 def _rolling_history(s: Session, patient_id: int, before: datetime, slot: Slot) -> dict[str, list[float]]:
     """Feature values from the same slot over the last `baseline_days` days (morning vs morning, T10)."""
     since = before - timedelta(days=settings.baseline_days)
@@ -32,6 +37,15 @@ def _rolling_history(s: Session, patient_id: int, before: datetime, slot: Slot) 
     for name, v in rows:
         hist[name].append(v)
     return hist
+
+
+def _day_lists(raw: str | None) -> dict[str, dict[str, list[float]]]:
+    """Today's per-check-in deviations {track: {branch: [D, ...]}}; old rows stored one float per branch."""
+    out: dict[str, dict[str, list[float]]] = {"anchored": {}, "rolling": {}}
+    for t, branches in (json.loads(raw) if raw else {}).items():
+        if t in out and isinstance(branches, dict):
+            out[t] = {b: (v if isinstance(v, list) else [v]) for b, v in branches.items()}
+    return out
 
 
 def _score_tracks(
@@ -110,7 +124,7 @@ def create_text_checkin(body: TextCheckInIn, s: Session = Depends(get_session)) 
 def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineResult) -> CheckInResponse:
     """Store features, run the state engine, escalate, pick today's intervention."""
     patient_id = patient.id
-    now = datetime.now(timezone.utc)
+    now = _now()
     checkin = CheckIn(
         patient_id=patient_id, ts=now, slot=slot,
         transcript=result.transcript, llm_json=result.llm_json, risk_flag=result.crisis,
@@ -142,7 +156,18 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
             select(StateScore).where(StateScore.patient_id == patient_id, StateScore.date < now.date())
             .order_by(col(StateScore.date).desc())
         ).first()
-        D_track = {t: state.daily_deviation(tr["D"][t]) for t in S_track}
+        score = s.exec(
+            select(StateScore).where(StateScore.patient_id == patient_id, StateScore.date == now.date())
+        ).first()
+        # All check-ins of the day count (STATUS.md B16): keep each check-in's D per track and branch,
+        # combine per branch with sum/sqrt(n), then average over branches. A later check-in no longer
+        # overwrites an earlier one (e.g. a negative diary followed by a neutral spoken check-in).
+        day = _day_lists(score.branch_scores_json if score else None)
+        for t in day:
+            for branch, d in tr["D"][t].items():
+                day[t].setdefault(branch, []).append(d)
+        day_branch = {t: {b: round(state.combine_checkins(v), 4) for b, v in day[t].items()} for t in day}
+        D_track = {t: state.daily_deviation(day_branch[t]) for t in S_track}
         prev_S = {"anchored": prev.S_anchored if prev else None, "rolling": prev.S_rolling if prev else None}
         for t, d in D_track.items():
             if d is not None:
@@ -152,15 +177,14 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
             # Escalate on whichever track is worse; tell the clinician which one (drift vs abrupt change)
             driver = max(present, key=present.get)
             S_val = present[driver]
-            branch_D = tr["D"][driver]
-            score = s.exec(
-                select(StateScore).where(StateScore.patient_id == patient_id, StateScore.date == now.date())
-            ).first() or StateScore(patient_id=patient_id, date=now.date(), D=D_track[driver], S=S_val)
+            branch_D = day_branch[driver]
+            score = score or StateScore(patient_id=patient_id, date=now.date(), D=D_track[driver], S=S_val)
             score.D, score.S, score.driver, score.baseline_version = D_track[driver], S_val, driver, active.version
             score.D_anchored, score.S_anchored = D_track["anchored"], S_track["anchored"]
             score.D_rolling, score.S_rolling = D_track["rolling"], S_track["rolling"]
-            score.top_features_json = json.dumps(state.top_contributors(tr["Z"][driver]))
-            score.branch_scores_json = json.dumps(tr["D"])
+            if tr["Z"][driver]:
+                score.top_features_json = json.dumps(state.top_contributors(tr["Z"][driver]))
+            score.branch_scores_json = json.dumps(day)
             s.add(score)
 
     recent = [x.S for x in s.exec(
@@ -187,6 +211,7 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
             S_anchored=S_track["anchored"], S_rolling=S_track["rolling"], driver=driver,
         ),
         baseline=BaselineOut(**baseline.progress(s, active or building, now)),
+        baseline_building=BaselineOut(**baseline.progress(s, building, now)) if building else None,
         intervention=intervention,
         crisis=result.crisis,
     )

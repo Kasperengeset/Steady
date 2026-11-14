@@ -22,6 +22,11 @@ SLOTS = ("morning", "evening")
 FEATURE_BRANCH = {f: b for b, dirs in state.DIRECTION.items() for f in dirs}
 
 
+def clock() -> datetime:
+    """Single clock for the baseline lifecycle and check-ins (tests replace it to advance days)."""
+    return datetime.now(timezone.utc)
+
+
 def _aware(dt: datetime) -> datetime:
     """SQLite drops tzinfo; everything is stored in UTC."""
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
@@ -46,7 +51,7 @@ def start(
     b = Baseline(
         patient_id=patient_id,
         version=(last.version + 1) if last else 1,
-        started_at=now or datetime.now(timezone.utc),
+        started_at=now or clock(),
         period_days=settings.healthy_period_days if period_days is None else period_days,
         min_checkins=settings.healthy_min_checkins if min_checkins is None else min_checkins,
         note=note,
@@ -71,7 +76,11 @@ def _period_values(s: Session, b: Baseline) -> dict[str, dict[str, list[float]]]
 
 
 def _counts(s: Session, b: Baseline) -> dict[str, int]:
-    rows = s.exec(select(CheckIn.slot).where(CheckIn.patient_id == b.patient_id, CheckIn.ts >= b.started_at)).all()
+    """Check-ins in the baseline period: since start, and only up to the lock for a locked baseline."""
+    q = select(CheckIn.slot).where(CheckIn.patient_id == b.patient_id, CheckIn.ts >= b.started_at)
+    if b.locked_at is not None:
+        q = q.where(CheckIn.ts <= b.locked_at)
+    rows = s.exec(q).all()
     counts = {slot: 0 for slot in SLOTS}
     for slot in rows:
         counts[slot.value if hasattr(slot, "value") else slot] += 1
@@ -79,7 +88,7 @@ def _counts(s: Session, b: Baseline) -> dict[str, int]:
 
 
 def progress(s: Session, b: Baseline, now: datetime | None = None) -> dict:
-    now = now or datetime.now(timezone.utc)
+    now = now or clock()
     counts = _counts(s, b)
     days = (now - _aware(b.started_at)).total_seconds() / 86400
     return {
@@ -96,9 +105,10 @@ def progress(s: Session, b: Baseline, now: datetime | None = None) -> dict:
 
 
 def try_lock(s: Session, b: Baseline, now: datetime | None = None) -> bool:
-    """Lock when the period is over and there are enough check-ins (in total). Slots with too few
-    check-ins get no slot-specific stats and fall back to the pooled 'all' stats when scoring."""
-    now = now or datetime.now(timezone.utc)
+    """Lock when the period is over, there are enough check-ins in total, and at least one feature has
+    enough values (min(min_checkins, settings.min_feature_n)). Otherwise the period is extended.
+    Slots with too few check-ins get no slot-specific stats and fall back to the pooled 'all' stats."""
+    now = now or clock()
     if b.status != BaselineStatus.building:
         return False
     if (now - _aware(b.started_at)).total_seconds() < b.period_days * 86400:
@@ -107,14 +117,23 @@ def try_lock(s: Session, b: Baseline, now: datetime | None = None) -> bool:
         return False  # period over but too few check-ins → keep building (extended)
 
     k = settings.sd_prior_strength
+    # Every feature needs a minimum number of values (text features have no corpus SD to lean on, so a
+    # scale from 1–2 entries would be a guess). Capped so short demo baselines still work.
+    min_n = min(b.min_checkins, settings.min_feature_n)
+    rows = []
     for slot, feats in _period_values(s, b).items():
         for f, vals in feats.items():
-            if slot != "all" and len(vals) < b.min_checkins:
+            if len(vals) < (min_n if slot == "all" else b.min_checkins):
                 continue
             branch = FEATURE_BRANCH.get(f)
             prior = state.prior_sd(state.load_branch(branch), f) if branch else None
             c, sc = state.robust_stats(vals, prior, k)
-            s.add(BaselineStat(baseline_id=b.id, slot=slot, feature=f, center=c, scale=sc, n=len(vals)))
+            rows.append(BaselineStat(baseline_id=b.id, slot=slot, feature=f, center=c, scale=sc, n=len(vals)))
+    if not rows:
+        # E.g. 3 spoken + 3 written check-ins: no single feature has enough values. Locking would give
+        # an active baseline that can never score (and it is never re-anchored automatically) → extend.
+        return False
+    s.add_all(rows)
 
     prev = latest(s, b.patient_id, BaselineStatus.active)
     if prev:

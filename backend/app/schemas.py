@@ -60,7 +60,8 @@ class CheckInResponse(BaseModel):
     checkin_id: int
     features: list[FeatureOut]
     state: StateOut
-    baseline: BaselineOut
+    baseline: BaselineOut  # the baseline used for scoring (or the building one if none is active)
+    baseline_building: BaselineOut | None = None  # a new baseline being built (while the old one still scores)
     intervention: InterventionOut
     crisis: bool
 
