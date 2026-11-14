@@ -72,30 +72,83 @@ def load_branch(name: str) -> BranchModel:
     return BranchModel(name, data["weights"], direction, trained=True, meta=meta)
 
 
-def zscores(today: dict[str, float], history: dict[str, list[float]], direction: dict[str, int]) -> dict[str, float]:
-    out: dict[str, float] = {}
-    for name, x in today.items():
-        hist = history.get(name, [])
-        if len(hist) < 3:
-            continue  # TODO: population norms during first week
-        mu, sd = statistics.fmean(hist), statistics.pstdev(hist) or 1.0
-        out[name] = direction.get(name, 1) * (x - mu) / sd
+MAD_TO_SD = 1.4826  # MAD × 1.4826 ≈ SD for normal data
+
+
+def robust_stats(values: list[float], prior_sd: float | None, k: float) -> tuple[float, float]:
+    """Centre = median, scale = MAD-based SD shrunk toward the corpus within-person SD.
+
+    With ~14–28 baseline check-ins a personal SD is noisy (and MAD can be 0), so
+        sigma^2 = (n · s_personal^2 + k · s_corpus^2) / (n + k)
+    lets the corpus dominate early and the person's own data take over as n grows.
+    Median/MAD keep one odd day (cold, bad recording) from distorting the baseline.
+    """
+    center = statistics.median(values)
+    mad = statistics.median(abs(v - center) for v in values) * MAD_TO_SD
+    n = len(values)
+    if prior_sd:
+        scale = ((n * mad**2 + k * prior_sd**2) / (n + k)) ** 0.5
+    else:
+        scale = mad or statistics.pstdev(values)
+    return center, scale if scale > 0 else 1.0
+
+
+def prior_sd(model: BranchModel, feature: str) -> float | None:
+    """Within-person SD measured on the training corpus (acoustic.json feature_stats), if any."""
+    return model.meta.get("feature_stats", {}).get(feature, {}).get("within_sd")
+
+
+def history_stats(
+    history: dict[str, list[float]], model: BranchModel, k: float, min_n: int
+) -> dict[str, tuple[float, float, int]]:
+    """feature -> (centre, scale, n) for this branch's features with at least min_n values."""
+    out = {}
+    for f in model.direction:
+        vals = history.get(f, [])
+        if len(vals) >= min_n:
+            c, sc = robust_stats(vals, prior_sd(model, f), k)
+            out[f] = (c, sc, len(vals))
     return out
 
 
-def branch_deviation(z: dict[str, float], model: BranchModel) -> float:
-    """Weighted sum of z-scores, rescaled to unit variance under 'no change'.
+def zscores(today: dict[str, float], stats: dict[str, tuple[float, float, int]], direction: dict[str, int]) -> dict[str, float]:
+    """Direction-adjusted z-scores of today's values against a baseline (positive = worse)."""
+    return {
+        f: direction.get(f, 1) * (x - stats[f][0]) / stats[f][1]
+        for f, x in today.items()
+        if f in stats
+    }
 
-    With weights summing to 1, sum(w*z) is a weighted *mean* whose noise SD is sqrt(sum w^2) (≈0.36 for
-    8 features), so fixed escalation thresholds (S > 1, S > 2) would almost never trigger. Dividing by
-    sqrt(sum w^2) makes D ~ N(0, 1) when nothing changes (assuming independent features; real features
-    are correlated, so true noise is somewhat larger).
-    """
-    w = {k: model.weights.get(k, 0.0) for k in z}
-    norm = sum(v * v for v in w.values()) ** 0.5
-    if norm == 0:
+
+def _corr(model: BranchModel, a: str, b: str) -> float:
+    """Within-person correlation between two features' direction-adjusted z-scores (0 if unknown)."""
+    if a == b:
+        return 1.0
+    wc = model.meta.get("within_corr")
+    if not wc:
         return 0.0
-    return sum(w[k] * v for k, v in z.items()) / norm
+    idx = {f: i for i, f in enumerate(wc["features"])}
+    if a not in idx or b not in idx:
+        return 0.0
+    r = wc["matrix"][idx[a]][idx[b]]
+    return r * model.direction.get(a, 1) * model.direction.get(b, 1)
+
+
+def branch_deviation(z: dict[str, float], model: BranchModel) -> float:
+    """Weighted sum of z-scores, rescaled to unit variance under 'no change' (STATUS.md B10, B12).
+
+    Var(sum w*z) = sum_ij w_i w_j R_ij, where R is the within-person correlation of the (direction-
+    adjusted) z-scores, measured on Androids and stored in <branch>.json["within_corr"]. Dividing by its
+    square root makes D ~ N(0, 1) when nothing changes, so escalation thresholds (S > 1, S > 2) keep a
+    fixed meaning even though e.g. energy and arousal move together. Without a correlation matrix the
+    features are treated as independent (norm = sqrt(sum w^2)).
+    """
+    keys = list(z)
+    w = {k: model.weights.get(k, 0.0) for k in keys}
+    var = sum(w[a] * w[b] * _corr(model, a, b) for a in keys for b in keys)
+    if var <= 0:
+        return 0.0
+    return sum(w[k] * z[k] for k in keys) / var**0.5
 
 
 def daily_deviation(branch_D: dict[str, float]) -> float | None:

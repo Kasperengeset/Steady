@@ -4,6 +4,7 @@ extract()      -> the ~6 interpretable features the state engine uses
 extract_full() -> all 88 eGeMAPS functionals (reference model in ml/train_weights.py)
 """
 
+import threading
 from functools import lru_cache
 
 import numpy as np
@@ -20,8 +21,18 @@ MAP = {
 }
 
 
-@lru_cache(maxsize=1)
+_LOCK = threading.Lock()
+
+
 def _smile():
+    """Load once, thread-safe: the startup warm-up thread and the first request may call this at the
+    same time, and concurrent first imports of transformers fail (ImportError)."""
+    with _LOCK:
+        return _load_smile()
+
+
+@lru_cache(maxsize=1)
+def _load_smile():
     import opensmile
 
     return opensmile.Smile(

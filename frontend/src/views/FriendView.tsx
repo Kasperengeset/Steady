@@ -10,14 +10,14 @@ export default function FriendView() {
 
   return (
     <section className="view">
-      <h1>Venner</h1>
+      <h1>Friends</h1>
       {hint?.show_hint ? (
         <div className="card nudge">
           <p>{hint.message}</p>
-          <button>Send en melding</button>
+          <button>Send a message</button>
         </div>
       ) : (
-        <p className="muted">Ingen hint i dag. Du ser aldri helsedata – bare et vink når kontakt kan hjelpe.</p>
+        <p className="muted">No nudge today. You never see health data – only a hint when reaching out could help.</p>
       )}
     </section>
   )

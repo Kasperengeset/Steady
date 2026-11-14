@@ -14,9 +14,41 @@ class FeatureOut(BaseModel):
 
 
 class StateOut(BaseModel):
-    S: float | None
+    S: float | None  # combined = max(S_anchored, S_rolling); None while the healthy baseline is building
     level: int
-    branches: dict[str, float] = {}  # per-branch D_b today
+    branches: dict[str, float] = {}  # per-branch D_b today (driver track)
+    S_anchored: float | None = None  # vs the fixed healthy baseline – catches slow drift
+    S_rolling: float | None = None  # vs the last 14 days (same slot) – catches abrupt change
+    driver: str | None = None  # which track set S
+
+
+class BaselineOut(BaseModel):
+    version: int
+    status: str  # building | active | retired | rejected
+    started_at: str
+    locked_at: str | None
+    period_days: int
+    days_elapsed: float
+    checkins: dict[str, int]  # per slot since the baseline started
+    min_checkins: int
+    confirmed_by: str | None
+
+
+class BaselineStartIn(BaseModel):
+    period_days: int | None = None  # default settings.healthy_period_days (demo: 0)
+    min_checkins: int | None = None
+    note: str | None = None
+
+
+class BaselineConfirmIn(BaseModel):
+    clinician: str
+    note: str | None = None
+
+
+class BaselineDetail(BaseModel):
+    active: BaselineOut | None
+    building: BaselineOut | None
+    stats: dict[str, dict[str, dict[str, float]]]  # slot -> feature -> {center, scale, n}
 
 
 class InterventionOut(BaseModel):
@@ -28,6 +60,7 @@ class CheckInResponse(BaseModel):
     checkin_id: int
     features: list[FeatureOut]
     state: StateOut
+    baseline: BaselineOut
     intervention: InterventionOut
     crisis: bool
 
@@ -57,6 +90,8 @@ class PatientSummary(BaseModel):
     S: float | None
     level: int
     trend: list[float]
+    driver: str | None = None
+    baseline_status: str | None = None  # building | active | None
 
 
 class PatientDetail(BaseModel):

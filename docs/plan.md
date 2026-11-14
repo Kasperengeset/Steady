@@ -1,164 +1,166 @@
-# Beyond the Clinic – tentativ plan (Junction 2026)
+# Beyond the Clinic – tentative plan (Junction 2026)
 
-**Utfordring:** Aalto University – hjelpe pasienter å holde seg friske hjemme etter depresjonsbehandling (TMS – transkraniell magnetstimulering).
-**Lag:** 2 personer — **A** = frontend/produkt/pitch, **B** = backend/ML.
-**Frister:** Pre-submission fre 13.11 kl. 23:59 · Endelig innlevering søn 15.11 kl. 10:00 · Peer review søn 10:30–14:00 (må være til stede).
+> **This is the original plan from Friday 13 Nov.** Several parts have since changed (three model branches, a fixed healthy baseline, equal weights, etc.). The current state, results and decisions are in [`STATUS.md`](../STATUS.md).
 
----
-
-## 1. Konsept
-
-Daglig kort stemmesamtale med en AI (morgen + kveld, ~20 s) → måler tilstand mot pasientens egen baseline → velger dagens tiltak og lærer hva som virker → eskalerer til venner/behandler ved behov.
-
-**Én motor, tre visninger:**
-
-1. **Pasient** – innsjekk og dagens tiltak
-2. **Behandler** – pasientliste sortert etter risiko, trend og *hvorfor*
-3. **Venner/community** – diskret hint når pasienten kan trenge kontakt
+**Challenge:** Aalto University – help patients stay well at home after depression treatment (TMS – transcranial magnetic stimulation).
+**Team:** 2 people — **A** = frontend/product/pitch, **B** = backend/ML.
+**Deadlines:** Pre-submission Fri 13 Nov 23:59 · Final submission Sun 15 Nov 10:00 · Peer review Sun 10:30–14:00 (must be present).
 
 ---
 
-## 2. Arkitektur
+## 1. Concept
+
+A short daily voice conversation with an AI (morning + evening, ~20 s) → measures the state against the patient's own baseline → chooses today's intervention and learns what works → escalates to friends/clinician when needed.
+
+**One engine, three views:**
+
+1. **Patient** – check-in and today's intervention
+2. **Clinician** – patient list sorted by risk, trend and *why*
+3. **Friends/community** – a discreet hint when the patient may need contact
+
+---
+
+## 2. Architecture
 
 ```
-Mobil-PWA (pasient) ──lyd──▶ FastAPI-backend
-     │                          ├─▶ Gemini (innhold, opplevd følelse, krise-flagg → JSON)
-     │                          ├─▶ Parselmouth/openSMILE (prosodi-målinger)
-     │                          └─▶ audEERING wav2vec2 (arousal/valens/dominans)
-     │                          ▼
-     │                    Tilstandsmotor (personlig baseline + vekter fra Androids)
-     │                          ▼
-     │                    Bandit (velger tiltak) ──▶ Eskaleringsstige
-     ▼                          ▼                          ▼
- Dagens tiltak          Behandlerdashbord           Venne-varsel
+Mobile PWA (patient) ──audio──▶ FastAPI backend
+     │                            ├─▶ Gemini (content, perceived emotion, crisis flag → JSON)
+     │                            ├─▶ Parselmouth/openSMILE (prosody measurements)
+     │                            └─▶ audEERING wav2vec2 (arousal/valence/dominance)
+     │                            ▼
+     │                      State engine (personal baseline + weights from Androids)
+     │                            ▼
+     │                      Bandit (chooses intervention) ──▶ Escalation ladder
+     ▼                            ▼                               ▼
+ Today's intervention     Clinician dashboard              Friend notification
 ```
 
-| Del | Valg |
+| Part | Choice |
 |---|---|
-| Frontend | PWA (progressive web app) i React + Vite, opptak med `MediaRecorder` |
-| Samtale | Gemini Live API (sanntids tale inn/ut) |
+| Frontend | PWA (progressive web app) in React + Vite, recording with `MediaRecorder` |
+| Conversation | Gemini Live API (real-time speech in/out) |
 | Backend | Python, FastAPI, SQLite |
-| Wearable | Adapter: simulerte data først, Google Health API (erstatter Fitbit Web API) hvis tid |
-| Personvern | Rå lyd slettes etter trekkuttrekk; Vertex AI i EU-region |
+| Wearable | Adapter: simulated data first, Google Health API (replaces the Fitbit Web API) if time |
+| Privacy | Raw audio deleted after feature extraction; Vertex AI in an EU region |
 
 ---
 
-## 3. Signaler per innsjekk
+## 3. Signals per check-in
 
-| Kilde | Trekk $x_i$ | Retning (høy = verre) |
+| Source | Feature $x_i$ | Direction (high = worse) |
 |---|---|---|
-| Prosodi (Parselmouth/eGeMAPS) | taletempo, F0-standardavvik (tonehøydevariasjon), pauseandel, energi | −, −, +, − |
-| audEERING-modell | arousal, valens | −, − |
-| Gemini (innhold) | humør 0–10, energi, anhedoni, sosial kontakt, `risk` | −, −, +, −, krise |
-| Wearable | søvnlengde, nattlig HRV (RMSSD), hvilepuls, skritt | −, −, +, − |
+| Prosody (Parselmouth/eGeMAPS) | speech rate, F0 standard deviation (pitch variation), pause ratio, energy | −, −, +, − |
+| audEERING model | arousal, valence | −, − |
+| Gemini (content) | mood 0–10, energy, anhedonia, social contact, `risk` | −, −, +, −, crisis |
+| Wearable | sleep duration, nightly HRV (RMSSD), resting heart rate, steps | −, −, +, − |
 
-**Prinsipp:** LLM (stor språkmodell) for *mening*, signalbehandling for *målinger*. Målinger må være reproduserbare for at baseline skal fungere.
+**Principle:** LLM (large language model) for *meaning*, signal processing for *measurements*. Measurements must be reproducible for the baseline to work.
 
 ---
 
-## 4. Tilstandsmotor
+## 4. State engine
 
-For trekk $i$ på dag $t$, vindu $W = [t-14,\, t-1]$:
+For feature $i$ on day $t$, window $W = [t-14,\, t-1]$:
 
 $$z_{i,t} = s_i \cdot \frac{x_{i,t} - \mu_{i,W}}{\sigma_{i,W}}, \quad s_i \in \{-1,+1\}$$
 
-$$D_t = \sum_i w_i\, z_{i,t}, \qquad S_t = \alpha D_t + (1-\alpha) S_{t-1}, \quad \alpha \approx 0{,}3$$
+$$D_t = \sum_i w_i\, z_{i,t}, \qquad S_t = \alpha D_t + (1-\alpha) S_{t-1}, \quad \alpha \approx 0.3$$
 
-- $S_t$ er EWMA (eksponentielt vektet glidende gjennomsnitt).
-- Første uke: populasjonsnormer til baseline er bygget.
-- Vekter $w_i$: fra logistisk regresjon på Androids Corpus (se §6); fallback = like vekter.
+- $S_t$ is an EWMA (exponentially weighted moving average).
+- First week: population norms until the baseline is built.
+- Weights $w_i$: from logistic regression on the Androids Corpus (see §6); fallback = equal weights.
 
-**Eskaleringsstige**
+**Escalation ladder**
 
-| Nivå | Utløser | Mottaker |
+| Level | Trigger | Recipient |
 |---|---|---|
-| 0 | Normalt | Pasient (dagens tiltak) |
-| 1 | $S_t > 1$ i 3 dager | Valgte venner – hint, ikke data |
-| 2 | $S_t > 2$, eller nivå 1 i 7 dager uten bedring | Behandler – flagg + topp-3 bidragende trekk |
-| ! | `risk = true` | Behandler umiddelbart + krisekontakt vises |
+| 0 | Normal | Patient (today's intervention) |
+| 1 | $S_t > 1$ for 3 days | Chosen friends – a hint, not data |
+| 2 | $S_t > 2$, or level 1 for 7 days without improvement | Clinician – flag + top-3 contributing features |
+| ! | `risk = true` | Clinician immediately + crisis contact shown |
 
 ---
 
-## 5. Tiltaksloop (bandit)
+## 5. Intervention loop (bandit)
 
-- **Armer:** tur ute, ringe en venn, morgenlys, musikkøkt, pusteøvelse, liten aktivitetsoppgave (atferdsaktivering).
-- **Morgen:** Thompson sampling — $\theta_k \sim \text{Beta}(a_k, b_k)$, velg $\arg\max_k \theta_k$.
-- **Kveld:** belønning
-  $$r_t = 0{,}5 \cdot \text{gjennomført} \cdot \text{vurdering} + 0{,}5 \cdot \mathbb{1}[S_{t+1} < S_t] \in [0,1]$$
-- **Oppdatering:** $a_k \leftarrow a_k + r_t,\; b_k \leftarrow b_k + (1-r_t)$.
-- **Hvis tid:** kontekstuell – egne posteriorer for «lav energi» vs. «normal».
-
----
-
-## 6. Datagrunnlag for stemmeanalyse
-
-1. **Litteratur:** Cummins et al. (2015), *Speech Communication* – begrunner valg av prosodi-trekk; eGeMAPS som standardsett.
-2. **Forhåndstrent modell:** audEERING `wav2vec2-large-robust-12-ft-emotion-msp-dim` (MSP-Podcast). Lisens CC-BY-NC-SA 4.0.
-3. **Klinisk validering:** Androids Corpus (116 personer, 64 deprimerte / 52 kontroller, italiensk, direkte nedlasting 3,7 GB).
-   - Trekk per person → standardiser → logistisk regresjon med regularisering
-   - Kryssvalidering med medfølgende `fold-list.csv` (speaker-uavhengig)
-   - Rapporter AUC (areal under ROC-kurven) → koeffisienter blir $w_i$
-   - ⚠️ Kun ikke-kommersiell forskning, ingen videredistribusjon → **data skal ikke i repoet**
-
-**Begrensninger å si høyt:** mellom-person-klassifiserer brukt på innen-person-endring (vekter = prior, baseline = kjerne) · lite datasett · italiensk (prosodi overføres, innhold tas av Gemini).
+- **Arms:** walk outside, call a friend, morning light, music session, breathing exercise, small activity task (behavioural activation).
+- **Morning:** Thompson sampling — $\theta_k \sim \text{Beta}(a_k, b_k)$, choose $\arg\max_k \theta_k$.
+- **Evening:** reward
+  $$r_t = 0.5 \cdot \text{completed} \cdot \text{rating} + 0.5 \cdot \mathbb{1}[S_{t+1} < S_t] \in [0,1]$$
+- **Update:** $a_k \leftarrow a_k + r_t,\; b_k \leftarrow b_k + (1-r_t)$.
+- **If time:** contextual – separate posteriors for "low energy" vs "normal".
 
 ---
 
-## 7. Simulator (demo-motor)
+## 6. Data foundation for voice analysis
 
-Syntetisk persona, 60 dager:
+1. **Literature:** Cummins et al. (2015), *Speech Communication* – justifies the choice of prosody features; eGeMAPS as the standard set.
+2. **Pre-trained model:** audEERING `wav2vec2-large-robust-12-ft-emotion-msp-dim` (MSP-Podcast). Licence CC-BY-NC-SA 4.0.
+3. **Clinical validation:** Androids Corpus (116 people, 64 depressed / 52 controls, Italian, direct download 3.7 GB).
+   - Features per person → standardise → logistic regression with regularisation
+   - Cross-validation with the included `fold-list.csv` (speaker-independent)
+   - Report AUC (area under the ROC curve) → coefficients become $w_i$
+   - ⚠️ Non-commercial research only, no redistribution → **the data must not go into the repo**
 
-- Latent humør som AR(1)-prosess; tilbakefall starter ~dag 40
-- Hver arm har skjult sann effekt for personaen
-- Trekk = funksjon av latent humør + støy
-
-**Skal vise:** (1) $S_t$ flagger før selvrapportert humør faller, (2) banditen konvergerer mot riktige armer. Slider for hurtigspoling.
+**Limitations to state openly:** a between-person classifier applied to within-person change (weights = prior, baseline = core) · small dataset · Italian (prosody transfers, content is handled by Gemini).
 
 ---
 
-## 8. Tidsplan
+## 7. Simulator (demo engine)
 
-| Tid | A (frontend/pitch) | B (backend/ML) |
+Synthetic persona, 60 days:
+
+- Latent mood as an AR(1) process; relapse starts ~day 40
+- Each arm has a hidden true effect for the persona
+- Features = function of latent mood + noise
+
+**Should show:** (1) $S_t$ flags before self-reported mood drops, (2) the bandit converges to the right arms. Slider for fast-forward.
+
+---
+
+## 8. Timeline
+
+| Time | A (frontend/pitch) | B (backend/ML) |
 |---|---|---|
-| **Fre 21:30–23:59** | Repo (offentlig, MIT), PWA-skjelett, opptaksknapp. **Pre-submission** | FastAPI-skjelett, datamodell, start nedlasting av Androids |
-| *Søvn* | | |
-| **Lør 08–12** | Pasientflyt: morgen/kveld, dagens tiltak | Trekkuttrekk + logistisk regresjon på Androids → $w_i$, AUC |
-| **Lør 12** | **Integrasjonssjekk:** én innsjekk ende til ende | |
-| **Lør 12–13** | Mentorprat (MJ Suh): signaler, datasett, feedback | |
-| **Lør 13–18** | Behandlerdashbord + venne-visning | Gemini-kall, tilstandsmotor, bandit, eskalering, simulator → UI |
-| **Lør 18–22** | Pitch deck (PDF) + demomanus | Google Health-adapter *hvis tid*, ellers polering |
-| **Lør 22–24** | Video (maks 2:00). **Feature freeze** | |
-| **Søn 08–09:30** | Buffer, sett prosjekt til **FINAL** | |
-| **Søn 10:30–14** | Peer review ved bordet | |
+| **Fri 21:30–23:59** | Repo (public, MIT), PWA skeleton, record button. **Pre-submission** | FastAPI skeleton, data model, start Androids download |
+| *Sleep* | | |
+| **Sat 08–12** | Patient flow: morning/evening, today's intervention | Feature extraction + logistic regression on Androids → $w_i$, AUC |
+| **Sat 12** | **Integration check:** one check-in end to end | |
+| **Sat 12–13** | Mentor chat (MJ Suh): signals, datasets, feedback | |
+| **Sat 13–18** | Clinician dashboard + friend view | Gemini call, state engine, bandit, escalation, simulator → UI |
+| **Sat 18–22** | Pitch deck (PDF) + demo script | Google Health adapter *if time*, otherwise polish |
+| **Sat 22–24** | Video (max 2:00). **Feature freeze** | |
+| **Sun 08–09:30** | Buffer, set project to **FINAL** | |
+| **Sun 10:30–14** | Peer review at the table | |
 
 ---
 
 ## 9. Pitch
 
-**Video (2:00):** problem (0:15) → persona (0:15) → live innsjekk + tiltak (0:30) → hurtigspoling: læring og tidlig flagg (0:25) → behandler- og vennevisning (0:20) → hvorfor smart sensing (0:15).
+**Video (2:00):** problem (0:15) → persona (0:15) → live check-in + intervention (0:30) → fast-forward: learning and early flag (0:25) → clinician and friend view (0:20) → why smart sensing (0:15).
 
-**Bord (30 s):** dommer snakker 20 s → ser egen score og tiltak → slider viser oppdaget tilbakefall.
+**Table (30 s):** a judge talks for 20 s → sees their own score and intervention → the slider shows a detected relapse.
 
-**Kjernebudskap:** *LLM for mening, signalbehandling for målinger, personlig baseline for endring – validert på klinisk korpus.*
+**Core message:** *LLM for meaning, signal processing for measurements, personal baseline for change – validated on a clinical corpus.*
 
 ---
 
-## 10. Kuttliste (i rekkefølge)
+## 10. Cut list (in order)
 
-1. Ekte Google Health-kobling
-2. Gemini Live (fall tilbake til opptak + TTS/tekst)
-3. Kontekstuell bandit
-4. Innlogging
+1. Real Google Health connection
+2. Gemini Live (fall back to recording + TTS/text)
+3. Contextual bandit
+4. Login
 
-## 11. Regler å huske
+## 11. Rules to remember
 
-- All kode skrives under eventet
-- Offentlig repo, MIT-lisens (men ikke Androids-data)
-- Innlevering: navn, punchline, beskrivelse, teknologier, video ≤ 2:00, demo- og kildekodelenke, pitch deck (PDF)
+- All code is written during the event
+- Public repo, MIT licence (but not the Androids data)
+- Submission: name, punchline, description, technologies, video ≤ 2:00, demo and source-code link, pitch deck (PDF)
 
-## 12. Åpne spørsmål
+## 12. Open questions
 
-- Endelig rollefordeling A/B
-- Har vi en Fitbit/Pixel Watch tilgjengelig?
-- Hvilken Gemini Live-modell er nyest i AI Studio, og støtter den språket vi demoer på?
-- Har mentorene egne data eller bedre datasett?
+- Final A/B role split
+- Do we have a Fitbit/Pixel Watch available?
+- Which Gemini Live model is newest in AI Studio, and does it support the language we demo in?
+- Do the mentors have their own data or better datasets?
