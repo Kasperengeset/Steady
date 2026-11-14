@@ -14,6 +14,10 @@ import sys
 import time
 from pathlib import Path
 
+from _venv import ensure_backend_venv  # noqa: E402 (script dir is on sys.path)
+
+ensure_backend_venv()
+
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
