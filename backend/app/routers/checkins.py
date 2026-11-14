@@ -1,24 +1,41 @@
 import json
+import logging
 import os
 import tempfile
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, UploadFile
+from sqlalchemy import update
 from sqlmodel import Session, col, select
 
-from .. import baseline, explanation, prompt
+from .. import baseline, explanation, prompt, rewards
 from ..config import settings
 from ..db import get_session
-from ..engine import bandit, escalation, state
+from ..engine import bandit, escalation, signals, state
 from ..models import (
-    Arm, BaselineStatus, CheckIn, ContactKind, Escalation, Feature, InterventionLog, Patient, Slot, StateScore,
+    Arm, BaselineStatus, CheckIn, ContactKind, Escalation, Feature, FeatureSource, InterventionLog, Patient, Slot, StateScore,
 )
-from ..pipeline import PipelineResult, add_phrase, extract_features, extract_text_features, transcribe_phrase
-from ..schemas import BaselineOut, CheckInResponse, FeatureOut, InterventionOut, StateOut, TextCheckInIn
+from ..pipeline import PipelineResult, add_phrase, extract_features, extract_text_features, extract_wearable_features, transcribe_phrase
+from ..schemas import BaselineOut, CheckInResponse, FeatureOut, InterventionOut, StateOut, TextCheckInIn, WearableDayIn
 
 router = APIRouter(tags=["checkins"])
+log = logging.getLogger(__name__)
+MAX_AUDIO_BYTES = 15 * 1024 * 1024
+
+
+def _saved_response(s: Session, pid: int, key: str | None) -> CheckInResponse | None:
+    if key is None:
+        return None
+    if not key.strip() or len(key) > 100:
+        raise HTTPException(400, "invalid Idempotency-Key")
+    row = s.exec(select(CheckIn).where(CheckIn.patient_id == pid, CheckIn.request_key == key)).first()
+    if row is None:
+        return None
+    if row.response_json:
+        return CheckInResponse.model_validate_json(row.response_json)
+    raise HTTPException(409, "check-in is still being saved; try again shortly")
 
 
 def _now() -> datetime:
@@ -87,23 +104,32 @@ def _score_tracks(
     return {"D": D, "Z": Z, "shares": shares}
 
 
-def _todays_intervention(s: Session, patient_id: int, today: date) -> InterventionOut:
+def _todays_intervention(s: Session, patient_id: int, today: date, top: list[dict] | None = None) -> InterventionOut:
     arms = s.exec(select(Arm).where(Arm.patient_id == patient_id)).all()
     labels = {a.key: a.label for a in arms}
     log = s.exec(
         select(InterventionLog).where(InterventionLog.patient_id == patient_id, InterventionLog.date == today)
     ).first()
     if log is None:
-        arm = bandit.choose_arm(arms)
+        fit = signals.fitting_arms(top, [a.key for a in arms])
+        arm = bandit.choose_arm([a for a in arms if a.key in fit])
         log = InterventionLog(patient_id=patient_id, date=today, arm_key=arm.key)
         s.add(log)
     return InterventionOut(arm_key=log.arm_key, label=labels.get(log.arm_key, log.arm_key))
 
 
-async def _to_temp(upload: UploadFile) -> str:
+async def _to_temp(upload: UploadFile, limit: int = MAX_AUDIO_BYTES) -> str:
+    content_type = (upload.content_type or "application/octet-stream").split(";")[0]
+    if not (content_type.startswith("audio/") or content_type in ("application/octet-stream", "video/webm")):
+        raise HTTPException(415, "Upload an audio recording.")
+    payload = await upload.read(limit + 1)
+    if not payload:
+        raise HTTPException(400, "The recording is empty. Try recording it again.")
+    if len(payload) > limit:
+        raise HTTPException(413, "The recording is too large. Use a shorter recording.")
     suffix = os.path.splitext(upload.filename or "")[1] or ".wav"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(await upload.read())
+        tmp.write(payload)
         return tmp.name
 
 
@@ -113,6 +139,7 @@ async def create_checkin(
     patient_id: int = Form(...),
     slot: Slot = Form(...),
     phrase: UploadFile | None = None,
+    request_key: str | None = Header(default=None, alias="Idempotency-Key"),
     s: Session = Depends(get_session),
 ) -> CheckInResponse:
     """Spoken check-in. `audio` = the free-talk memo (30 s). `phrase` (optional, #21) = the fixed
@@ -120,52 +147,100 @@ async def create_checkin(
     patient = s.get(Patient, patient_id)
     if patient is None:
         raise HTTPException(404, "patient not found")
+    saved = _saved_response(s, patient_id, request_key)
+    if saved is not None:
+        return saved
 
     # Raw audio lives only in temp files and is deleted right after feature extraction.
     paths = [await _to_temp(audio)]
-    if phrase is not None:
-        paths.append(await _to_temp(phrase))
     try:
+        if phrase is not None:
+            try:
+                paths.append(await _to_temp(phrase, limit=4 * 1024 * 1024))
+            except HTTPException:
+                log.info("Optional phrase upload was skipped; keeping the free memo.")
         with ThreadPoolExecutor(max_workers=1) as pool:
             # The phrase transcription (network) runs while the memo is analysed
             phrase_text = pool.submit(transcribe_phrase, paths[1]) if len(paths) > 1 else None
             result = extract_features(paths[0])
             if phrase_text is not None:
-                add_phrase(result, paths[1], phrase_text.result())
+                try:
+                    phrase_transcript = phrase_text.result()
+                except Exception:
+                    phrase_transcript = None
+                    log.info("Phrase transcription unavailable; using the timing check.")
+                try:
+                    add_phrase(result, paths[1], phrase_transcript)
+                except Exception:
+                    log.exception("Optional phrase analysis failed; keeping the free memo.")
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     finally:
         for p in paths:
             os.remove(p)
-    return _record_checkin(s, patient, slot, result)
+    return _record_checkin(s, patient, slot, result, request_key=request_key)
 
 
 @router.post("/checkins/text", response_model=CheckInResponse)
-def create_text_checkin(body: TextCheckInIn, s: Session = Depends(get_session)) -> CheckInResponse:
+def create_text_checkin(body: TextCheckInIn, s: Session = Depends(get_session),
+                       request_key: str | None = Header(default=None, alias="Idempotency-Key")) -> CheckInResponse:
     """Written diary entry -> text branch only (no audio). English; 50 to 100 words works best."""
     patient = s.get(Patient, body.patient_id)
     if patient is None:
         raise HTTPException(404, "patient not found")
     if not body.text.strip():
         raise HTTPException(400, "empty diary entry")
-    return _record_checkin(s, patient, body.slot, extract_text_features(body.text))
+    saved = _saved_response(s, body.patient_id, request_key)
+    if saved is not None:
+        return saved
+    return _record_checkin(s, patient, body.slot, extract_text_features(body.text), request_key=request_key)
 
 
-def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineResult) -> CheckInResponse:
+@router.post("/checkins/wearable", response_model=CheckInResponse)
+def create_wearable_checkin(body: WearableDayIn, s: Session = Depends(get_session)) -> CheckInResponse:
+    """One completed wearable day; no diary or daily prompt is answered by an automatic sync."""
+    patient = s.get(Patient, body.patient_id)
+    if patient is None:
+        raise HTTPException(404, "patient not found")
+    try:
+        result = extract_wearable_features(**body.model_dump(exclude={"patient_id", "slot"}))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    if not result.features:
+        raise HTTPException(400, "no wearable values in the request")
+    extras = ({"active_minutes": body.active_minutes} if body.active_minutes is not None else
+              {"active_minutes": sum(1 for m in body.minute_steps if m >= 100)} if body.minute_steps else {})
+    return _record_checkin(s, patient, body.slot, result, extras)
+
+
+def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineResult,
+                    extras: dict[str, float] | None = None,
+                    recorded_at: datetime | None = None,
+                    request_key: str | None = None) -> CheckInResponse:
     """Store features, run the state engine, escalate, pick today's intervention."""
     patient_id = patient.id
-    now = _now()
+    # Serialize state updates for a person. A retried request cannot append another
+    # B31 contribution or pay another reward after its original HTTP response was lost.
+    s.execute(update(Patient).where(Patient.id == patient_id).values(name=Patient.name))
+    s.refresh(patient)
+    saved = _saved_response(s, patient_id, request_key)
+    if saved is not None:
+        s.commit()
+        return saved
+    now = recorded_at or _now()
     checkin = CheckIn(
         patient_id=patient_id, ts=now, slot=slot,
         transcript=result.transcript, llm_json=result.llm_json, risk_flag=result.crisis,
-        speech_s=result.speech_s,
+        speech_s=result.speech_s, request_key=request_key,
     )
     s.add(checkin)
     s.flush()
     for name, value, source in result.features:
         s.add(Feature(checkin_id=checkin.id, name=name, value=value, source=source))
     # Daily prompt (#22): local time of every check-in; the first one after the prompt fires answers it
-    prompt_out = prompt.answer(s, patient_id, checkin, now)
+    memo_features = [(n, v, src) for n, v, src in result.features
+                     if src != FeatureSource.wearable and not n.startswith("phrase_")]
+    prompt_out = prompt.answer(s, patient_id, checkin, now) if memo_features else None
 
     # Healthy-baseline lifecycle (STATUS.md T1): no score until a baseline is locked
     active = baseline.latest(s, patient_id, BaselineStatus.active)
@@ -177,13 +252,15 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
 
     today_by_branch: dict[str, dict[str, float]] = defaultdict(dict)
     for name, v, source in result.features:
-        today_by_branch[state.BRANCH_OF_SOURCE[source]][name] = v
+        if not name.startswith("phrase_") and name != "active_minutes":
+            today_by_branch[state.BRANCH_OF_SOURCE[source]][name] = v
 
     S_val: float | None = None
     elevated = False
     S_track: dict[str, float | None] = {"anchored": None, "rolling": None}
     driver: str | None = None
     branch_D: dict[str, float] = {}
+    top_now: list[dict] | None = None
     if active is not None:
         tr = _score_tracks(s, patient_id, now, slot, today_by_branch, active, checkin.local_hour)
         prev = s.exec(
@@ -242,26 +319,34 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
                 recent_anch.append(S_track["anchored"])
             score.elevated = escalation.elevated_flag(recent_anch, settings.elevated_S, settings.elevated_days)
             elevated = score.elevated
+            top_now = json.loads(score.top_features_json or "[]")
             s.add(score)
 
     recent = [x.S for x in s.exec(
-        select(StateScore).where(StateScore.patient_id == patient_id).order_by(col(StateScore.date))
+        select(StateScore).where(StateScore.patient_id == patient_id, StateScore.date <= now.date())
+        .order_by(col(StateScore.date))
     ).all()]
     if S_val is not None and (not recent or recent[-1] != S_val):
         recent.append(S_val)
     level = escalation.evaluate_level(recent[-7:], result.crisis)
     if level > 0 and level != patient.risk_level:
         recipient = ContactKind.friend if level == 1 else ContactKind.clinician
-        s.add(Escalation(patient_id=patient_id, level=level, recipient=recipient,
+        s.add(Escalation(patient_id=patient_id, ts=now, level=level, recipient=recipient,
                          reason="crisis flag" if result.crisis else f"S={S_val} ({driver})"))
     patient.risk_level = level
     s.add(patient)
 
-    intervention = _todays_intervention(s, patient_id, now.date())
-    s.commit()
+    intervention = _todays_intervention(s, patient_id, now.date(), top_now)
+    earned = [{"reason": r.reason, "label": rewards.LABELS.get(r.reason, r.reason), "amount": r.amount}
+              for r in rewards.sync(s, patient_id, now)]
+    if any(src == FeatureSource.wearable for _, _, src in result.features):
+        from .. import appie
+        values = {**{n: v for n, v, _ in result.features}, **(extras or {})}
+        earned.extend(appie.on_wearable(s, patient_id, now, values))
+    s.flush()
     why = explanation.latest_explanation(s, patient_id) if S_val is not None else None
 
-    return CheckInResponse(
+    response = CheckInResponse(
         checkin_id=checkin.id,
         features=[FeatureOut(name=n, value=round(v, 3), source=src.value) for n, v, src in result.features],
         state=StateOut(
@@ -275,4 +360,10 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
         crisis=result.crisis,
         prompt=prompt_out,
         phrase=result.phrase_check,
+        rewards=earned,
     )
+    if request_key is not None:
+        checkin.response_json = response.model_dump_json()
+        s.add(checkin)
+    s.commit()
+    return response

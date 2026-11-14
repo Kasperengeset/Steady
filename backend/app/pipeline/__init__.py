@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 from ..config import settings
 from ..models import FeatureSource
-from . import audio, emotion, llm, phrase, prosody, text
+from . import audio, emotion, health, llm, phrase, prosody, text
 
 log = logging.getLogger(__name__)
 
@@ -110,4 +110,12 @@ def add_phrase(res: PipelineResult, phrase_path: str, transcript: str | None) ->
 def extract_text_features(diary: str) -> PipelineResult:
     res = PipelineResult(transcript=diary)
     _add_text(res, diary)
+    return res
+
+
+def extract_wearable_features(**day) -> PipelineResult:
+    """Health measurements, using the same extractor as training and Google Health replay."""
+    res = PipelineResult()
+    for name, value in health.wearable_features(**day).items():
+        res.features.append((name, value, FeatureSource.wearable))
     return res

@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     # Spoken check-ins: verbatim transcript (pipeline/llm.py). The text model is English only.
     transcribe_model: str = "gemini-3.5-transcribe"
     transcribe_language: str = "en-US"
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    google_redirect_uri: str = "http://127.0.0.1:8000/api/google-health/callback"
+    frontend_url: str = "http://localhost:5173"
+    health_sync_enabled: bool = True
+    warmup_models: bool = True
     # Context-aware content scores of diaries and transcripts (#28). Weight 0 in text.json until the gate passes.
     rate_model: str = "gemini-4-hydrogen"
     # Off by default (B33): at weight 0 it changes no score, so sending every diary/transcript to Google

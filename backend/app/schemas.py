@@ -1,8 +1,9 @@
 """API contract – mirrored in frontend/src/lib/api.ts. Change both together."""
 
 from datetime import date as Date
+from typing import Annotated
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .models import Slot
 from .schemas_prompt import PromptAnswerOut
@@ -69,6 +70,7 @@ class CheckInResponse(BaseModel):
     crisis: bool
     prompt: PromptAnswerOut | None = None  # this check-in answered today's daily prompt (#22)
     phrase: dict | None = None  # reading check of the fixed phrase, if one was uploaded (#21)
+    rewards: list[dict] = Field(default_factory=list)
 
 
 class TextCheckInIn(BaseModel):
@@ -76,18 +78,33 @@ class TextCheckInIn(BaseModel):
 
     patient_id: int
     slot: Slot
-    text: str
+    text: str = Field(max_length=10000)
+
+
+class WearableDayIn(BaseModel):
+    """Completed wearable day. Missing measurements are omitted; exercise is engagement-only."""
+
+    patient_id: int
+    slot: Slot = Slot.morning
+    minute_steps: list[Annotated[float, Field(ge=0, allow_inf_nan=False)]] | None = None
+    steps: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    sleep_hours: float | None = Field(default=None, ge=0, le=24, allow_inf_nan=False)
+    sleep_midpoint: float | None = Field(default=None, ge=-24, le=24, allow_inf_nan=False)
+    resting_hr: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+    hrv_rmssd: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    active_minutes: float | None = Field(default=None, ge=0, le=1440, allow_inf_nan=False)
 
 
 class FeedbackIn(BaseModel):
     patient_id: int
     date: Date
     completed: bool
-    rating: int | None = None
+    rating: int | None = Field(default=None, ge=1, le=5)
 
 
 class FeedbackOut(BaseModel):
     reward: float
+    rewards: list[dict] = Field(default_factory=list)
 
 
 class PatientSummary(BaseModel):

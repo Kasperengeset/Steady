@@ -1,21 +1,35 @@
-// Converts a MediaRecorder blob (webm/opus, mp4/aac …) to 16 kHz mono 16-bit WAV,
-// which the backend reads without ffmpeg and which matches openSMILE/wav2vec2 input.
+// 16 kHz mono 16-bit WAV: the backend reads it without ffmpeg, and it matches openSMILE/wav2vec2 input.
 
 const TARGET_SR = 16_000
 
+/** Raw mono samples (any rate) -> 16 kHz WAV. Resamples with an OfflineAudioContext; nothing is decoded. */
+export async function encodeWav16k(pcm: Float32Array<ArrayBuffer>, sampleRate: number): Promise<Blob> {
+  if (sampleRate === TARGET_SR) return wavBlob(pcm)
+  const offline = new OfflineAudioContext(1, Math.ceil((pcm.length * TARGET_SR) / sampleRate), TARGET_SR)
+  const buf = offline.createBuffer(1, pcm.length, sampleRate)
+  buf.copyToChannel(pcm, 0)
+  const src = offline.createBufferSource()
+  src.buffer = buf
+  src.connect(offline.destination)
+  src.start()
+  return wavBlob((await offline.startRendering()).getChannelData(0))
+}
+
+/** A compressed recording (webm/opus, mp4/aac …) -> 16 kHz WAV. Needs the browser to decode it. */
 export async function toWav16k(blob: Blob): Promise<Blob> {
   const ctx = new AudioContext()
-  const decoded = await ctx.decodeAudioData(await blob.arrayBuffer())
-  await ctx.close()
+  let decoded: AudioBuffer
+  try { decoded = await ctx.decodeAudioData(await blob.arrayBuffer()) } finally { await ctx.close() }
 
-  const frames = Math.ceil(decoded.duration * TARGET_SR)
-  const offline = new OfflineAudioContext(1, frames, TARGET_SR) // 1 channel = downmix
+  const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * TARGET_SR), TARGET_SR) // 1 channel = downmix
   const src = offline.createBufferSource()
   src.buffer = decoded
   src.connect(offline.destination)
   src.start()
-  const pcm = (await offline.startRendering()).getChannelData(0)
+  return wavBlob((await offline.startRendering()).getChannelData(0))
+}
 
+function wavBlob(pcm: Float32Array): Blob {
   const buf = new ArrayBuffer(44 + pcm.length * 2)
   const v = new DataView(buf)
   const str = (o: number, s: string) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)))

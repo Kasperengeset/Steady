@@ -42,7 +42,10 @@ DIRECTION: dict[str, dict[str, int]] = {
         # Gemini content scores (pipeline/llm.py) – weight 0 in weights/text.json until the stub is replaced
         "mood": -1, "energy_self": -1, "anhedonia": +1, "social_contact": -1,
     },
-    "health": {"sleep_hours": -1, "hrv_rmssd": -1, "resting_hr": +1, "steps": -1},
+    "health": {
+        "steps": -1, "inactive_share": +1, "night_activity": +1, "relative_amplitude": -1, "m10_onset": +1,
+        "sleep_hours": -1, "sleep_midpoint": +1, "resting_hr": +1, "hrv_rmssd": -1,
+    },
 }
 
 WEIGHTS_DIR = Path(__file__).with_name("weights")
