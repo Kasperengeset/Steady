@@ -163,6 +163,17 @@ Klassifikatoren lærer å skille *personer*. Appen skal oppdage *endring innen p
 - Medianforholdet mellom variasjon innen og mellom personer er **0,70** (simulatoren antar 0,6).
 - **Forbehold:** klippene er fra samme økt og samme mikrofon, så variasjonen fra dag til dag er større, særlig for `energy`, som avhenger av avstanden til telefonen. Tallene for `energy` og `arousal` er derfor optimistiske.
 
+### Forutsetninger for at det skal virke
+En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
+1. **Baselinen trenger 1–2 uker**, ikke én dag (~7–14 innsjekker med hverdager, helg, morgen og kveld).
+2. **Klinikken bekrefter utgangspunktet** (for eksempel MADRS ved avsluttet TMS), fordi remisjon ofte har restsymptomer.
+3. **Stabile opptaksforhold.** Ny telefon, annen avstand eller et støyende rom ser ut som endring. Dette er den største praktiske risikoen (T14).
+4. **Stemmen er ikke spesifikk for depresjon.** Forkjølelse, søvn, alkohol, stress og medisiner gir falske alarmer, så vi trenger flere signalkilder (T3, T4).
+5. **Baselinen eldes.** Den bør fornyes jevnlig, men **bare når frisk tilstand er bekreftet** (for eksempel med PHQ-9). Ellers kommer frosken i gryta tilbake.
+6. **Ikke alle viser depresjon i stemmen.** Effekten er moderat i snitt.
+7. **Pasienten må sjekke inn regelmessig.**
+8. **Simulatortallene bygger på antakelser.** Virkelig ytelse krever en pilot over tid.
+
 ### Forbedringsplan (prioritert)
 1. **T1** fast «frisk baseline». Simulatoren: 21/50 → 0/50 bom.
 2. **T13** vekter for endring ∝ d innen person (tabellen over). Klassifikatoren brukes bare til retning og validering, og simulatoren får målt støy i stedet for 0,6.
