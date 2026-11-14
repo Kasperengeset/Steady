@@ -94,6 +94,25 @@ First model version (C chosen by AUC): openSMILE features only 0.76, wav2vec2 fe
 - **Language:** the corpus is Italian. Prosody transfers reasonably across languages; content is handled by the text branch.
 - **Licence:** both Androids and the audEERING model are non-commercial only.
 
+### Reading task vs interview (T7, #21) – is read speech the better reference for the daily phrase?
+`ml/voice/reading_vs_interview.py` → [`ml/reports/voice/reading_vs_interview.md`](ml/reports/voice/reading_vs_interview.md). Androids has one reading per speaker (~48 s, the same fairy tale), so each is cut into 5 equal parts (~10 s, like the ~9 s phrase); a two-way model (speaker + part) removes the text effect.
+
+| | Interview | Reading |
+|---|---|---|
+| AUC, our 8 features | **0.77 ± 0.08** | 0.68 ± 0.14 (whole file), 0.71 ± 0.13 (5 parts) |
+| AUC, 88 eGeMAPS | 0.88 | 0.83 |
+| Within-person SD | – | **1.5× smaller** (median over features; energy 2.4×, arousal 2.1×) |
+| ICC (median) | 0.52 | **0.72** |
+| Detectability, equal weights (held-out) | 1.58 | 1.69 (folds 0.5–3.5 → a tie) |
+| Directions vs engine | all 8 agree | `pause_ratio` **flips**; `jitter`, `shimmer` ~no group difference |
+
+- **Read speech is steadier, not more informative.** Depression also moves it less, so the net signal-to-noise is the same. Between people, reading separates worse, and interview + reading together (0.71) is no better than interview alone.
+- **For the phrase:** steadiness is exactly what a fixed phrase is for, so the reading parts are the right corpus prior for `phrase_*` features (within-person SD for B15, correlation for B12), never the interview clips (B28). Only 5 phrase candidates: `energy`, `arousal`, `valence`, `f0_std`, `speech_rate`.
+- **Not shown:** that the phrase is steadier than free talk from *day to day*. That is the phrase check below.
+
+### Phrase check (#21) – ready for recording
+`ml/voice/phrase_check.py <folder>` takes our own recordings only (refuses corpus paths). File names: `<person>_<YYYYMMDD>-<HHMM>_<phrase|free>.<ext>`, e.g. `kasper_20261114-0930_phrase.m4a` + `kasper_20261114-0930_free.m4a`; 5 sessions per person at different times of day; keep the folder under `recorded_voice/` (gitignored). It reports the within-person SD ratio phrase/free per feature (pooled, per person, F-test, 90 % CI), the phrase–free correlation and the hour slope → `ml/reports/voice/phrase_check.md` (summary statistics only). **Gate (B29, set before recording):** weight only if the 90 % CI of the SD ratio is below 1, the ratio is below 1 for every person, ≥ 2 people × ≥ 4 sessions, and the feature is a B28 candidate. With 2 × 5 sessions only a ratio below ~0.54 passes.
+
 ---
 
 ## 2b. Text model (Mahdan)
@@ -431,8 +450,8 @@ A good healthy baseline is **necessary but not sufficient**.
 | B19 | **Keep the EWMA rule; the 3-state HMM stays an experiment** (`engine/relapse.py`, `sim/evaluate_relapse.py`) | Decision gate: at the same calibrated false-alarm rate it did not detect more relapses or earlier, and its probabilities were overconfident (P > 0.95–0.999 needed). The limit is the signal (per-patient baseline bias, noise), not the decision rule |
 | B20 | S is explained by an exact split over days and features | Explainability requirement: `S = Σ weight_j·D_j` and `D = Σ feature shares`, so every point of S traces back to a day and a feature – no hidden model |
 | B21 | Elevated flag (S_anchored < −1 for 3 days) for the clinician only | "Better than normal" can be hypomania. It must not reach friends. Simulator: 38/60 elevated episodes caught at ~1 false flag/yr with 2 check-ins/day |
-| B22 | **Fixed phrase as its own upload, gated by a reading check, stored but not scored** (#21, `pipeline/phrase.py`) | The same words every day put the change in the voice. Two files (`phrase` + `audio`) so we never have to find the phrase inside free talk. Phrase features are stored as `phrase_*` (their own baseline values) but stay out of `DIRECTION`, so they never reach D until the phrase check shows they are steadier than free talk (#27). Reading check: Gemini transcript vs the Rainbow Passage, WER > 0.5 skips the phrase that day; without a key only the reading rate (41 syllables / speech span, 1.5–8 syll/s) is checked. The phrase transcript never reaches the text branch; the crisis phrase list still runs on it. Live check on TTS audio: the phrase scored WER 0, and free talk read in its place WER 1.14 (rejected) |
-| B23 | **Daily prompt: uniform time 09:00–21:00 local, outside quiet hours, 2 h on-time window, lateness never penalised** (#22, `app/prompt.py`) | Experience sampling catches the day as it is. Drawn on first use but always over the whole day's window, so the time does not depend on when the app is opened. Only a check-in after the prompt fires answers it, once a day, and a check-in from a client that never showed the prompt never counts as prompted. "On time" only gates the bonus (#24); a late check-in counts fully. Each check-in stores `prompt_at` and `local_hour` for the time-of-day work (#27) |
+| B28 | Phrase features take their corpus prior from the **reading task**, not the interview; only `energy`, `arousal`, `valence`, `f0_std`, `speech_rate` are phrase candidates | Androids reading (5 parts per speaker): within-person SD 1.5× smaller, ICC 0.72 vs 0.52, same net detectability (1.69 vs 1.58 held-out, a tie), AUC lower (0.68–0.71 vs 0.77). `pause_ratio` flips direction in read speech, `jitter`/`shimmer` keep no group difference (`ml/reports/voice/reading_vs_interview.md`) |
+| B29 | Gate for phrase weights, set **before** recording: 90 % CI of the SD ratio phrase/free below 1, below 1 for every person, ≥ 2 people × ≥ 4 sessions, a B28 candidate. Until then weight 0 | 2 people × 5 sessions can only show a large difference (ratio < ~0.54); a lenient gate would tune the engine to 2 voices (B13) |
 
 ---
 
@@ -448,7 +467,8 @@ A good healthy baseline is **necessary but not sufficient**.
 - [ ] **T4** Health branch: Fitbit/Google Health adapter, weights from the Depresjon dataset (minute-level activity, MADRS) (GitHub issues #5, #10)
 - [ ] **T5** What to show before the healthy baseline is locked (population norms?)
 - [ ] **T6** Consider down-weighting `energy` because of mic dependence
-- [ ] **T7** Run the reading task as an extra check (`--task reading --no-write`)
+- [x] **T7** Reading task vs interview (`ml/voice/reading_vs_interview.py`, §2): reading is steadier (1.5× smaller within-person SD) but separates worse (AUC 0.68–0.71 vs 0.77); it is the prior for phrase features (B28)
+- [ ] **T25 (Kasper, Mahdan)** Record the phrase check: 5 sessions each (phrase + 30 s free talk, different times of day), then `ml/voice/phrase_check.py recorded_voice/phrase_check` → gate B29
 - [ ] **T8** Bandit reward: "did the state improve?" (`S_{t+1} < S_t`) is not wired in (`routers/interventions.py`)
 - [x] **T9** Test with our own recordings: 8 clips from Kasper and Mahdan (see «Smoke test»)
 - [x] **T10** ≥ 7 check-ins for the rolling track; morning and evening separately in both tracks
