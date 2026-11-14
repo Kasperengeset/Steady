@@ -10,6 +10,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 
+from ..config import settings
 from ..models import FeatureSource
 from . import audio, emotion, llm, phrase, prosody, text
 
@@ -27,11 +28,20 @@ class PipelineResult:
 
 
 def _add_text(res: PipelineResult, txt: str) -> None:
-    """Text branch: TF-IDF model + lexicon features + deterministic crisis phrases."""
+    """Text branch: TF-IDF model + lexicon features + deterministic crisis phrases, plus Gemini content
+    scores of the writer's own current state (#28; weight 0 in text.json, STATUS.md B33). Only the free
+    talk or diary reaches here, never the fixed phrase. No key or an invalid reply → no content scores."""
     out = text.analyze_text(txt)
     for name, v in out["features"].items():
         res.features.append((name, v, FeatureSource.text))
     res.crisis = res.crisis or out["crisis"]
+    rating = llm.rate_text(txt) if settings.rate_text_enabled else None
+    if rating:
+        for name, v in rating["scores"].items():
+            res.features.append((name, v, FeatureSource.llm))
+        payload = json.loads(res.llm_json) if res.llm_json else {}
+        payload["content"] = {"evidence": rating["evidence"], "language": rating["language"]}  # clinician view
+        res.llm_json = json.dumps(payload)
 
 
 def extract_features(audio_path: str) -> PipelineResult:

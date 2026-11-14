@@ -13,6 +13,12 @@ class Settings(BaseSettings):
     # Spoken check-ins: verbatim transcript (pipeline/llm.py). The text model is English only.
     transcribe_model: str = "gemini-3.5-transcribe"
     transcribe_language: str = "en-US"
+    # Context-aware content scores of diaries and transcripts (#28). Weight 0 in text.json until the gate passes.
+    rate_model: str = "gemini-4-hydrogen"
+    # Off by default (B33): at weight 0 it changes no score, so sending every diary/transcript to Google
+    # would be data without purpose (GDPR data minimisation) and ~5 s per check-in. RATE_TEXT_ENABLED=true
+    # in .env for evaluation; on by default only once T28 passes and the scores get weight.
+    rate_text_enabled: bool = False
     # Web Push for the daily prompt (#22, P2). Only in .env – create with scripts/gen_vapid.py.
     # The subject is a contact the push services can reach: "mailto:you@…" or an https URL.
     vapid_public_key: str = ""

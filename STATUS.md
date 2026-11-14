@@ -168,6 +168,23 @@ TF-IDF + logistic regression is a bag of words and word pairs. It sees "alone" o
 - **Label = forum, not diagnosis.** It learns "writes like r/depression". Meditation posts are flagged 27 % of the time, divorce 17 %: introspective writing.
 - **Action (T19, Mahdan):** add context-aware Gemini content scores next to `text_logit`, validated on a team-written context set before they get any weight. The brief was handed over on 14 Nov.
 
+### Gemini content scores (#28) – built, weight 0 (B33)
+`llm.rate_text` (`gemini-4-hydrogen`, temperature 0, strict JSON schema, `store=False`) rates only the writer's own state now: `mood`, `energy_self`, `anhedonia`, `social_contact` (0–10) with an evidence quote each. Invalid JSON, out-of-range values, an error or `about_self_now = false` → no scores (never a neutral 5). It runs for diaries and real transcripts (`pipeline._add_text`), never on the fixed phrase; evidence goes to `llm_json["content"]` for the clinician. Text and replies are never logged; tests never call Gemini (empty key in `conftest.py`).
+
+Context check (`ml/text/eval_context.py` → [`ml/reports/text/context_check.md`](ml/reports/text/context_check.md)), 40 team-written entries (10 Norwegian), each rated 5 times, all scorers on the same anchor-based z-scale:
+
+| Correct side | TF-IDF | Gemini | Combined |
+|---|---|---|---|
+| Context entries (32: recovery, other people, negation, sarcasm, masked, mixed, style) | 50 % | **100 %** | **100 %** |
+| Plain anchors (8) | 75 % | 100 % | 100 % |
+| Norwegian (10) | 40 % | 100 % | 100 % |
+| Pair order (7 pairs) | 57 % | 100 % | 100 % |
+
+Repeat SD 0.21 points (gap 7.3), r(TF-IDF, Gemini) = +0.04, median latency 4.7 s per call; 3 of 200 replies rejected by the validator. **The gate passes, but it is not independent:** the same author wrote the set and the instruction, and the instruction names the categories. So the weights stay 0 until a held-out set written without seeing the instruction also passes (T28).
+
+**Off by default** (`rate_text_enabled = False`; `RATE_TEXT_ENABLED=true` in `.env` for evaluation): at weight 0 it changes no score, so sending every diary and transcript to Google would be data without purpose (data minimisation) and ~5 s per check-in. It is switched on together with the weights once T28 passes. `eval_context.py` calls `rate_text` directly and is unaffected.
+
+
 ---
 
 ## 3. Key concepts (things we have discussed)
@@ -485,6 +502,7 @@ A good healthy baseline is **necessary but not sufficient**.
 | B30 | **Random prompt times: one slot, with the hour as a covariate** (per-feature slope fitted on the healthy baseline, shrunk toward 0 with k = 5); no morning/evening split | Simulator (#27): two slots at 14:00 never helped and raised false clinician alerts to 1.4–2.3/yr; the covariate was never worse and with a strong day curve missed 17 vs 31 of 100 (`ml/reports/engine/design_checks.md`) |
 | B31 | Extra unprompted check-ins count at **half weight** (`Σ w·D / √Σ w²`, prompted w = 1, extras w = 0.5) | Counting fully (B16) is right only if same-day noise is independent; with 30–60 % shared day noise it gave 1.5–2.9 false clinician alerts/yr. Half weight keeps most of the detection gain (31 vs 32 missed at shared 0.3) with fewer false alarms. Context-only throws the gain away |
 | B32 | **Engagement stays out of S** (weight 0); it is used only by the avatar check-ins (#25) | At the same calibrated false-alarm rate it missed more relapses in every scenario (72–92 vs 47–82 of 100). Its apparent gain under the uncalibrated rule came from 3–5 false alerts/yr |
+| B33 | **Gemini content scores at weight 0** although the #28 gate passed on the team set | Combined scorer 100 % on context entries vs TF-IDF 50 %, pairs 100 %, repeat SD 0.21 (`ml/reports/text/context_check.md`). But the set and the instruction were written by the same author and the instruction names the test categories, so the pass is not independent evidence. Weights per #28 (text_logit 0.5, each Gemini score 0.125, with a correlation block) only after a held-out set passes (T28). Existing baselines need 5 rated entries anyway (B17). Off by default until then (`rate_text_enabled`): no diary text goes to Google for a score with no effect |
 
 ---
 
@@ -504,6 +522,7 @@ A good healthy baseline is **necessary but not sufficient**.
 - [ ] **T25 (Kasper, Mahdan)** Record the phrase check: 5 sessions each (phrase + 30 s free talk, different times of day), then `ml/voice/phrase_check.py recorded_voice/phrase_check` → gate B29
 - [x] **T26** B30 + B31 in the app: `settings.time_of_day = "hour"` (old `"slots"` kept), slope rows `BaselineStat.slot = "hour"` (center = slope/h, scale = reference hour), both tracks adjust for `CheckIn.local_hour`; extras weighted via `state.checkin_weight`, weights stored under `branch_scores_json["w"]`, explanation divides by √Σw² so B20 stays exact. Baselines locked before B30 fall back to `all` with no slope
 - [ ] **T27** Measure the shared same-day noise (2 check-ins on one day vs across days) once real data exists: it decides whether B16/B31 hold
+- [ ] **T28 (Mahdan)** Held-out context set for #28: ~20 entries written **without** reading `llm.RATE_INSTRUCTION` (same columns as `ml/text/context_set.csv`, ≥ 5 Norwegian), then `ml/text/eval_context.py --data <file> --report ml/reports/text/context_check_heldout.md`. If it passes: weights per #28 + within-text correlation block (B33)
 - [ ] **T8** Bandit reward: "did the state improve?" (`S_{t+1} < S_t`) is not wired in (`routers/interventions.py`)
 - [x] **T9** Test with our own recordings: 8 clips from Kasper and Mahdan (see «Smoke test»)
 - [x] **T10** ≥ 7 check-ins for the rolling track; morning and evening separately in both tracks
@@ -516,7 +535,7 @@ A good healthy baseline is **necessary but not sufficient**.
 - [x] Flow fixes after the main merge: day score no longer overwritten (B16), minimum values per feature (B17), lock only with stats (B18), correct re-baselining progress (`baseline_building`)
 - [ ] **T17** A branch with too few baseline values stays unscored until a new baseline. Consider letting a branch "join" an active baseline later once it has ≥ 5 values (only if the clinician confirms the patient is still well)
 - [~] **T12** Thresholds measured in the simulator (B19): clinician 0.4–1.4 false alerts/yr (OK), friends 2.3–4.8/yr (above the ≤ 2 target). Decide whether to tighten the friend rule (e.g. S > 1 for 4 days) – team decision
-- [ ] **T19 (Mahdan)** Text branch context: Gemini content scores (mood, energy_self, anhedonia, social_contact, the writer's own current state, with evidence quotes, English + Norwegian, `store=False`) next to `text_logit`. Validate on a team-written context set (~40 entries: recovery stories, other people's feelings, negations, sarcasm, masked low mood, style-matched pairs, Norwegian) plus a consistency check (5 repeated calls). Weight > 0 only if it fixes the context cases without hurting the plain ones
+- [~] **T19 (Mahdan)** Text branch context (built and checked by C, weight 0 pending T28, B33): Gemini content scores (mood, energy_self, anhedonia, social_contact, the writer's own current state, with evidence quotes, English + Norwegian, `store=False`) next to `text_logit`. Validate on a team-written context set (~40 entries: recovery stories, other people's feelings, negations, sarcasm, masked low mood, style-matched pairs, Norwegian) plus a consistency check (5 repeated calls). Weight > 0 only if it fixes the context cases without hurting the plain ones
 - [ ] **T18** Reduce the per-patient baseline bias (the main limit found in B19): longer baseline or 2 check-ins/day during it, and include the centre's uncertainty in the scale (≈ σ·√(1 + 1.57/n))
 - [x] **T20 (#21, backend)** Fixed phrase + 30 s memo: optional `phrase` file on `POST /api/checkins` (old clients keep working), `phrase_*` features, WER gate, tests in `backend/tests/test_phrase.py` (B22). Frontend two-step flow waits for #19 on main
 - [x] **T21 (#22, backend)** Daily prompt: `DailyPrompt` + `PromptSettings` (`models_prompt.py`), `GET /api/patients/{id}/prompt`, `POST …/prompt/now` (demo), `PUT …/prompt/settings` (quiet hours, pause today, off), nullable `CheckIn.prompt_at`, `local_hour`, `speech_s` (old `app.db` files get them via `db.add_missing_columns()`), tests in `backend/tests/test_prompt.py` (B23). Banner + demo button wait for #19. Web Push (P2) backend done: `app/push.py`, `/api/patients/{id}/push` (status, subscribe, unsubscribe, test), sent once per prompt inside the on-time window and never in quiet hours/pause/off, fixed text with no health data, dead devices removed, background sender only with VAPID keys in `.env` (`scripts/gen_vapid.py`); tests in `backend/tests/test_push.py`. The service worker waits for #19
