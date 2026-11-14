@@ -151,6 +151,16 @@ def branch_deviation(z: dict[str, float], model: BranchModel) -> float:
     return sum(w[k] * z[k] for k in keys) / var**0.5
 
 
+def combine_checkins(values: list[float]) -> float:
+    """Combine several check-ins of one day for one branch: sum(D) / sqrt(n) (Stouffer).
+
+    Each check-in's D has SD 1 under "no change", so the combination keeps SD 1 (thresholds keep their
+    meaning) while a real shift grows by sqrt(n) – two check-ins a day (morning + evening) make a
+    relapse easier to see without more false alarms. Assumes independent noise between check-ins.
+    """
+    return sum(values) / len(values) ** 0.5
+
+
 def daily_deviation(branch_D: dict[str, float]) -> float | None:
     return statistics.fmean(branch_D.values()) if branch_D else None
 

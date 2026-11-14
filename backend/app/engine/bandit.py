@@ -10,8 +10,10 @@ class ArmLike(Protocol):
     b: float
 
 
-def choose_arm[T: ArmLike](arms: list[T]) -> T:
-    return max(arms, key=lambda arm: random.betavariate(arm.a, arm.b))
+def choose_arm[T: ArmLike](arms: list[T], rng: random.Random | None = None) -> T:
+    """Thompson sampling. Pass a seeded rng for reproducible simulations."""
+    r = rng or random
+    return max(arms, key=lambda arm: r.betavariate(arm.a, arm.b))
 
 
 def reward(completed: bool, rating: int | None, state_improved: bool | None) -> float:

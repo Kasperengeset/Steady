@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     # Fixed "healthy" baseline after TMS (STATUS.md T1). Overridable per baseline via the API (demo).
     healthy_period_days: int = 14
     healthy_min_checkins: int = 10  # per slot; slots with fewer fall back to all slots pooled
+    min_feature_n: int = 5  # a feature needs this many baseline values (capped at the baseline's min_checkins)
     # Shrink personal SD toward the corpus within-person SD: sigma^2 = (n s^2 + k s0^2) / (n + k)
     sd_prior_strength: float = 5.0
 

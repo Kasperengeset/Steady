@@ -33,7 +33,8 @@ export interface CheckInResponse {
   checkin_id: number
   features: FeatureOut[]
   state: StateOut
-  baseline: BaselineOut
+  baseline: BaselineOut // the baseline used for scoring (or the building one if none is active)
+  baseline_building: BaselineOut | null // a new baseline being built while the old one still scores
   intervention: InterventionOut
   crisis: boolean
 }
