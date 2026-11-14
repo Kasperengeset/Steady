@@ -10,6 +10,7 @@ engine = create_engine(settings.database_url, connect_args={"check_same_thread":
 
 def init_db() -> None:
     from . import models  # noqa: F401 – register tables
+    from . import models_rewards, models_social  # noqa: F401 – #24, #26, #25
 
     SQLModel.metadata.create_all(engine)
 
