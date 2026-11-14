@@ -3,7 +3,7 @@
 When today's prompt fires, every device the person subscribed gets "Time for your check-in".
 
 - Off unless VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY and VAPID_SUBJECT are set in .env (never in git;
-  generate a VAPID key pair). Without them the app shows the prompt when opened.
+  create them with `python scripts/gen_vapid.py`). Without them the app shows the prompt when opened.
 - The notification carries no health data: it shows on a lock screen. Fixed text only.
 - Sent once per prompt (DailyPrompt.pushed_at), only within the on-time window, never in quiet hours,
   never when paused or off. Subscriptions the push service reports as gone (404/410) are deleted.
