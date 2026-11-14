@@ -21,7 +21,7 @@ Per check-in:
 1. Extract features per branch.
 2. **z-scores against the patient's own baselines** – two tracks (see §3 «Healthy baseline»): `z = direction × (today − centre) / scale`.
 3. Branch score per check-in: `D_branch = Σ w·z / √(wᵀ R w)`, where R is the within-person correlation measured on the corpus → D has SD 1 when nothing changes (B10, B12).
-4. **All check-ins of a day count** (B16): per branch the day's check-ins are combined as `Σ D / √n` (still SD 1, signal grows with √n); daily score `D_t` = mean over branches with data today. A later check-in no longer overwrites an earlier one.
+4. **All check-ins of a day count** (B16): per branch the day's check-ins are combined as `Σ w·D / √Σw²` (still SD 1); the prompted check-in and the day's first count fully, extras at w = 0.5 (B31). Daily score `D_t` = mean over branches with data today. Before scoring, each feature is adjusted for the hour of the check-in with the slope fitted on the healthy baseline (B30).
 5. Smoothing: `S_t = 0.3·D_t + 0.7·S_(t−1)`, per track; **S = max(S_anchored, S_rolling)**. S is split **exactly** over days and features for the clinician (B20).
 6. Escalation: friends at S > 1 for 3 days · clinician at S > 2 (or S > 1 for 7 days) · immediately on the crisis flag. Measured in the simulator: **0.4–1.4 false clinician alerts and 2.3–4.8 false friend nudges per healthy patient-year** (see «Decision layer»). Separately, an **elevated** flag (S_anchored < −1 for 3 days) goes to the clinician only (B21).
 7. Interventions are chosen with Thompson sampling (bandit) and learn from evening feedback.
@@ -198,7 +198,7 @@ The app compares the patient with themselves. **If someone is already depressed 
 - **Minimum values per feature (B17, B18):** a feature only gets baseline stats with ≥ `min(min_checkins, min_feature_n = 5)` values. Text features have no corpus SD to shrink toward, so 1–2 written entries would give a guessed scale. A branch without stats gets no anchored score (rolling track and crisis flag still work). **A baseline only locks if at least one feature qualifies** – otherwise the period is extended (e.g. 3 spoken + 3 written check-ins). Mixed use needs ≥ 5 of each kind for both branches to be scored.
 - **No score during the period.** The patient sees "Building your normal: day x of 14". The crisis flag works throughout.
 - **Re-baselining:** while a new baseline builds, the response has `baseline` (the active one, still scoring) and `baseline_building` (progress of the new one); the patient sees "Updating your normal". An active baseline's check-in count is frozen at lock.
-- **Stored per feature and per slot** (`morning` / `evening` / `all`):
+- **Stored per feature** (`all`; plus slope rows `hour`, B30 – the old `morning` / `evening` slots are kept only for baselines locked before B30):
   - centre = median
   - scale = MAD-based SD shrunk toward the corpus within-person SD: `σ² = (n·s² + k·s₀²)/(n + k)`, k = 5
   - slots with too few check-ins fall back to `all`
@@ -502,7 +502,7 @@ A good healthy baseline is **necessary but not sufficient**.
 - [ ] **T6** Consider down-weighting `energy` because of mic dependence
 - [x] **T7** Reading task vs interview (`ml/voice/reading_vs_interview.py`, §2): reading is steadier (1.5× smaller within-person SD) but separates worse (AUC 0.68–0.71 vs 0.77); it is the prior for phrase features (B28)
 - [ ] **T25 (Kasper, Mahdan)** Record the phrase check: 5 sessions each (phrase + 30 s free talk, different times of day), then `ml/voice/phrase_check.py recorded_voice/phrase_check` → gate B29
-- [ ] **T26** Implement B30 (hour covariate from `CheckIn.local_hour`) and B31 (extras at half weight) in `baseline.py`/`engine/state.py` after PR #29 is merged
+- [x] **T26** B30 + B31 in the app: `settings.time_of_day = "hour"` (old `"slots"` kept), slope rows `BaselineStat.slot = "hour"` (center = slope/h, scale = reference hour), both tracks adjust for `CheckIn.local_hour`; extras weighted via `state.checkin_weight`, weights stored under `branch_scores_json["w"]`, explanation divides by √Σw² so B20 stays exact. Baselines locked before B30 fall back to `all` with no slope
 - [ ] **T27** Measure the shared same-day noise (2 check-ins on one day vs across days) once real data exists: it decides whether B16/B31 hold
 - [ ] **T8** Bandit reward: "did the state improve?" (`S_{t+1} < S_t`) is not wired in (`routers/interventions.py`)
 - [x] **T9** Test with our own recordings: 8 clips from Kasper and Mahdan (see «Smoke test»)
