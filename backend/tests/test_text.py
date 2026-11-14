@@ -59,6 +59,7 @@ def test_crisis_phrases(text, expected):
 def no_audio_models(monkeypatch):
     """Spoken check-in without openSMILE / wav2vec2 – these tests are about the transcript path."""
     monkeypatch.setattr(pipeline.audio, "load", lambda path: None)
+    monkeypatch.setattr(pipeline.audio, "active_seconds", lambda x: 20.0)
     monkeypatch.setattr(pipeline.prosody, "extract_full_signal", lambda x: None)
     monkeypatch.setattr(pipeline.prosody, "from_full", lambda full: {"speech_rate": 2.0})
     monkeypatch.setattr(pipeline.emotion, "run_signal", lambda x: (None, {"arousal": 0.5, "valence": 0.5}))

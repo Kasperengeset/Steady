@@ -2,19 +2,20 @@ import json
 import os
 import tempfile
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from sqlmodel import Session, col, select
 
-from .. import baseline, explanation
+from .. import baseline, explanation, prompt
 from ..config import settings
 from ..db import get_session
 from ..engine import bandit, escalation, state
 from ..models import (
     Arm, BaselineStatus, CheckIn, ContactKind, Escalation, Feature, InterventionLog, Patient, Slot, StateScore,
 )
-from ..pipeline import PipelineResult, extract_features, extract_text_features
+from ..pipeline import PipelineResult, add_phrase, extract_features, extract_text_features, transcribe_phrase
 from ..schemas import BaselineOut, CheckInResponse, FeatureOut, InterventionOut, StateOut, TextCheckInIn
 
 router = APIRouter(tags=["checkins"])
@@ -87,28 +88,43 @@ def _todays_intervention(s: Session, patient_id: int, today: date) -> Interventi
     return InterventionOut(arm_key=log.arm_key, label=labels.get(log.arm_key, log.arm_key))
 
 
+async def _to_temp(upload: UploadFile) -> str:
+    suffix = os.path.splitext(upload.filename or "")[1] or ".wav"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(await upload.read())
+        return tmp.name
+
+
 @router.post("/checkins", response_model=CheckInResponse)
 async def create_checkin(
     audio: UploadFile,
     patient_id: int = Form(...),
     slot: Slot = Form(...),
+    phrase: UploadFile | None = None,
     s: Session = Depends(get_session),
 ) -> CheckInResponse:
+    """Spoken check-in. `audio` = the free-talk memo (30 s). `phrase` (optional, #21) = the fixed
+    reading phrase, recorded as its own file. Old clients send only `audio` and keep working."""
     patient = s.get(Patient, patient_id)
     if patient is None:
         raise HTTPException(404, "patient not found")
 
-    # Raw audio lives only in a temp file and is deleted right after feature extraction.
-    suffix = os.path.splitext(audio.filename or "")[1] or ".wav"
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(await audio.read())
-        tmp_path = tmp.name
+    # Raw audio lives only in temp files and is deleted right after feature extraction.
+    paths = [await _to_temp(audio)]
+    if phrase is not None:
+        paths.append(await _to_temp(phrase))
     try:
-        result = extract_features(tmp_path)
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            # The phrase transcription (network) runs while the memo is analysed
+            phrase_text = pool.submit(transcribe_phrase, paths[1]) if len(paths) > 1 else None
+            result = extract_features(paths[0])
+            if phrase_text is not None:
+                add_phrase(result, paths[1], phrase_text.result())
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
     finally:
-        os.remove(tmp_path)
+        for p in paths:
+            os.remove(p)
     return _record_checkin(s, patient, slot, result)
 
 
@@ -130,11 +146,14 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
     checkin = CheckIn(
         patient_id=patient_id, ts=now, slot=slot,
         transcript=result.transcript, llm_json=result.llm_json, risk_flag=result.crisis,
+        speech_s=result.speech_s,
     )
     s.add(checkin)
     s.flush()
     for name, value, source in result.features:
         s.add(Feature(checkin_id=checkin.id, name=name, value=value, source=source))
+    # Daily prompt (#22): local time of every check-in; the first one after the prompt fires answers it
+    prompt_out = prompt.answer(s, patient_id, checkin, now)
 
     # Healthy-baseline lifecycle (STATUS.md T1): no score until a baseline is locked
     active = baseline.latest(s, patient_id, BaselineStatus.active)
@@ -232,4 +251,6 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
         baseline_building=BaselineOut(**baseline.progress(s, building, now)) if building else None,
         intervention=intervention,
         crisis=result.crisis,
+        prompt=prompt_out,
+        phrase=result.phrase_check,
     )

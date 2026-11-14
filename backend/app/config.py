@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     # Spoken check-ins: verbatim transcript (pipeline/llm.py). The text model is English only.
     transcribe_model: str = "gemini-3.5-transcribe"
     transcribe_language: str = "en-US"
+    # Web Push for the daily prompt (#22, P2). Only in .env – create with scripts/gen_vapid.py.
+    # The subject is a contact the push services can reach: "mailto:you@…" or an https URL.
+    vapid_public_key: str = ""
+    vapid_private_key: str = ""
+    vapid_subject: str = ""
     database_url: str = f"sqlite:///{DATA_DIR / 'app.db'}"
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     # Rolling baseline (last N days) and EWMA smoothing – see docs/plan.md §4
