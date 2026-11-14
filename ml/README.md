@@ -19,6 +19,8 @@ backend/.venv/bin/python ml/train_weights.py                  # → backend/app/
                                                               #   ml/reports/acoustic/{roc,coefficients}.png, summary.md
 ```
 
+**Which Python?** `extract_features.py` and `score_clip.py` import the app's pipeline, so they need the backend venv (`backend/.venv`, has opensmile/transformers/sqlmodel). `train_weights.py` only needs pandas, numpy, scikit-learn and matplotlib, so any venv with those works.
+
 `--no-emotion` skips wav2vec2 (prosody only, minutes). `--task reading` does the reading task as a sanity check (reports in `ml/reports/acoustic/reading/`; use `--no-write` so it doesn't overwrite the interview weights).
 
 ## How it works

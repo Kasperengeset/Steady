@@ -29,9 +29,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from extract_features import emb_name  # noqa: E402
-
-from corpus import FEATURES, ROOT  # noqa: E402
+from corpus import FEATURES, ROOT, emb_name  # noqa: E402
 
 warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
 

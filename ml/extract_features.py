@@ -19,11 +19,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "backend"))
 from app.pipeline import audio, emotion, prosody  # noqa: E402
 
-from corpus import FEATURES, corpus_dir, list_files, parse_meta  # noqa: E402
-
-
-def emb_name(clip: str) -> str:
-    return clip.replace("/", "__").removesuffix(".wav") + ".npy"
+from corpus import FEATURES, corpus_dir, emb_name, list_files, parse_meta  # noqa: E402
 
 
 def main() -> None:

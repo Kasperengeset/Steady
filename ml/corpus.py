@@ -19,6 +19,11 @@ FEATURES = Path(os.environ.get("ANDROIDS_FEATURES", ROOT / "data" / "features"))
 _NAME = re.compile(r"(?P<nn>\d+)_(?P<X>[PCX])(?P<G>[MFX])(?P<mm>\d{2})_(?P<t>\d)")
 
 
+def emb_name(clip: str) -> str:
+    """File name of a clip's cached wav2vec2 embedding (unique across speaker dirs)."""
+    return clip.replace("/", "__").removesuffix(".wav") + ".npy"
+
+
 def corpus_dir() -> Path:
     """Unzipped corpus may sit in data/androids/ or one level below (e.g. Androids-Corpus/)."""
     for cand in [CORPUS, *CORPUS.glob("*/")]:
