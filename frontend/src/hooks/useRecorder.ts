@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-const MAX_MS = 20_000
+const DEFAULT_MAX_MS = 30_000 // the free-talk memo (#21); the phrase step passes 15 s
 
 export function useRecorder() {
   const [recording, setRecording] = useState(false)
   const [elapsed, setElapsed] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [maxMs, setMaxMs] = useState(DEFAULT_MAX_MS)
   const recRef = useRef<MediaRecorder | null>(null)
   const resolveRef = useRef<((b: Blob) => void) | null>(null)
   const timers = useRef<number[]>([])
@@ -16,8 +17,8 @@ export function useRecorder() {
     if (recRef.current?.state === 'recording') recRef.current.stop()
   }, [])
 
-  /** Starts recording; resolves with the audio when stopped (manually or after 20 s). */
-  const start = useCallback(async (): Promise<Blob> => {
+  /** Starts recording; resolves with the audio when stopped (manually or after `limitMs`). */
+  const start = useCallback(async (limitMs: number = DEFAULT_MAX_MS): Promise<Blob> => {
     setError(null)
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch((e: Error) => {
       setError(e.message)
@@ -36,15 +37,16 @@ export function useRecorder() {
     }
     recRef.current = rec
     rec.start()
+    setMaxMs(limitMs)
     setRecording(true)
     setElapsed(0)
     const t0 = Date.now()
     timers.current.push(window.setInterval(() => setElapsed(Date.now() - t0), 200))
-    timers.current.push(window.setTimeout(() => rec.stop(), MAX_MS))
+    timers.current.push(window.setTimeout(() => rec.stop(), limitMs))
     return done
   }, [])
 
   useEffect(() => () => { clearTimers(); stop() }, [stop])
 
-  return { recording, elapsed, maxMs: MAX_MS, error, start, stop }
+  return { recording, elapsed, maxMs, error, start, stop }
 }
