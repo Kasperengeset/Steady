@@ -1,4 +1,7 @@
-"""Relapse model: an explainable 3-state hidden Markov model on top of the daily deviation D.
+"""EXPERIMENT – not used by the app (STATUS.md B19: not better than the EWMA rule at the same false-alarm
+rate, and overconfident). Kept with sim/evaluate_relapse.py so the comparison can be rerun.
+
+Relapse model: an explainable 3-state hidden Markov model on top of the daily deviation D.
 
 Everything up to D is unchanged (features → healthy baseline → z → D per branch, combined per day as
 Σ D / √n so it has SD 1 under "no change"). This module replaces the old EWMA + fixed thresholds.

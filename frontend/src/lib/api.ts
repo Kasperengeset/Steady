@@ -11,6 +11,8 @@ export interface StateOut {
   S_anchored: number | null // vs fixed healthy baseline – slow drift
   S_rolling: number | null // vs last 14 days, same slot – abrupt change
   driver: 'anchored' | 'rolling' | null
+  elevated: boolean // unusually elevated vs healthy normal – clinician only
+  explanation: Explanation | null
 }
 export interface BaselineOut {
   version: number
@@ -46,12 +48,23 @@ export interface PatientSummary {
   trend: number[]
   driver: 'anchored' | 'rolling' | null
   baseline_status: 'building' | 'active' | null
+  elevated: boolean
 }
 export interface PatientDetail {
   patient: Record<string, unknown>
   scores: Record<string, unknown>[]
   checkins: Record<string, unknown>[]
   top_features: { branch: string; feature: string; contribution: number }[]
+  explanation: Explanation | null
+}
+/** Exact split of S over days and features (backend engine/explain.py). */
+export interface Explanation {
+  track: 'anchored' | 'rolling'
+  S: number
+  by_day: { date: string; D: number; weight: number; contribution: number }[]
+  by_feature: Record<string, number>
+  older: number
+  sentence: string
 }
 export interface FriendHint { show_hint: boolean; message: string }
 

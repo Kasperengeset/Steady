@@ -3,7 +3,7 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, col, select
 
-from .. import baseline
+from .. import baseline, explanation
 from ..db import get_session
 from ..models import BaselineStatus, CheckIn, Patient, StateScore
 from ..schemas import PatientDetail, PatientSummary
@@ -26,6 +26,7 @@ def list_patients(s: Session = Depends(get_session)) -> list[PatientSummary]:
             S=scores[-1].S if scores else None, trend=[x.S for x in scores[-14:]],
             driver=scores[-1].driver if scores else None,
             baseline_status=b.status.value if b else None,
+            elevated=bool(scores and scores[-1].elevated),
         ))
     return sorted(out, key=lambda x: (-x.level, -(x.S or 0)))
 
@@ -44,4 +45,5 @@ def get_patient(pid: int, s: Session = Depends(get_session)) -> PatientDetail:
         scores=[x.model_dump(mode="json") for x in scores],
         checkins=[c.model_dump(mode="json", exclude={"llm_json"}) for c in checkins],
         top_features=json.loads(scores[-1].top_features_json) if scores else [],
+        explanation=explanation.latest_explanation(s, pid),
     )

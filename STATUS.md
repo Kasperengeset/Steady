@@ -22,8 +22,8 @@ Per check-in:
 2. **z-scores against the patient's own baselines** – two tracks (see §3 «Healthy baseline»): `z = direction × (today − centre) / scale`.
 3. Branch score per check-in: `D_branch = Σ w·z / √(wᵀ R w)`, where R is the within-person correlation measured on the corpus → D has SD 1 when nothing changes (B10, B12).
 4. **All check-ins of a day count** (B16): per branch the day's check-ins are combined as `Σ D / √n` (still SD 1, signal grows with √n); daily score `D_t` = mean over branches with data today. A later check-in no longer overwrites an earlier one.
-5. Smoothing: `S_t = 0.3·D_t + 0.7·S_(t−1)`, per track; **S = max(S_anchored, S_rolling)**.
-6. Escalation: friends at S > 1 for 3 days · clinician at S > 2 · immediately on the crisis flag.
+5. Smoothing: `S_t = 0.3·D_t + 0.7·S_(t−1)`, per track; **S = max(S_anchored, S_rolling)**. S is split **exactly** over days and features for the clinician (B20).
+6. Escalation: friends at S > 1 for 3 days · clinician at S > 2 (or S > 1 for 7 days) · immediately on the crisis flag. Measured in the simulator: **0.4–1.4 false clinician alerts and 2.3–4.8 false friend nudges per healthy patient-year** (see «Decision layer»). Separately, an **elevated** flag (S_anchored < −1 for 3 days) goes to the clinician only (B21).
 7. Interventions are chosen with Thompson sampling (bandit) and learn from evening feedback.
 
 Weights per branch live in `backend/app/engine/weights/<branch>.json`. If the file is missing, literature directions and equal weights are used.
@@ -212,6 +212,38 @@ Interpretation:
 - **The bandit learns moderately in 70 days**: it ends on the truly best intervention in 45/100 patients (chance ≈ 17/100). Reward is capped at 0.5 because "did the state improve?" is not wired in (T8).
 - **Assumptions** (returned by the API): measured within-session noise × `day_noise_factor`, measured correlation, self-report lagging 4 days.
 
+### ⭐ Decision layer: why the EWMA rule stays (and the HMM does not)
+We tested an explainable **3-state hidden Markov model** (well / relapse / elevated) as a replacement for the EWMA + fixed thresholds (`backend/app/engine/relapse.py`, kept as an **experiment, not used by the app**). Comparison on the same seeded synthetic patients, with both methods' clinician thresholds **calibrated to ≤ 1 false onset per healthy patient-year** (`backend/.venv/bin/python -m app.sim.evaluate_relapse` from `backend/`):
+
+| Day-to-day noise | Check-ins/day | Missed of 100: current rule | EWMA calibrated | HMM calibrated |
+|---|---|---|---|---|
+| ×1.0 | 1 | 31 | 28 | 30 |
+| ×1.0 | 2 | 5 | 4 | 4 |
+| ×1.5 | 1 | 45 | 53 | 51 |
+| ×1.5 | 2 | 26 | 32 | 22 |
+| ×2.0 | 1 | 56 | 66 | 100 (cannot be calibrated) |
+| ×2.0 | 2 | 50 | 47 | 51 |
+
+- **The HMM is not better at the same false-alarm rate.** The median delay from relapse start to alert is also the same (~18–28 days, with a relapse building over ~15 days).
+- **Its probabilities are overconfident.** It needs P > 0.95–0.999 to stay at 1 false alert a year, so "95 %" would mislead a clinician. Tempering the evidence (emission SD 1.3–1.6) makes the thresholds sane only with 2 check-ins/day.
+- **Why: the bottleneck is the signal, not the decision rule.** Each healthy patient carries a **persistent bias** from a 14-check-in baseline (per-patient mean of D from −0.58 to +0.63; D's SD ≈ 1.13 instead of 1). No decision rule removes that. More measurements (2/day), a longer baseline, more branches and real day-to-day noise estimates are what move the numbers.
+- **The original thresholds were never calibrated, but they turn out reasonable:** 0.4–1.4 false clinician alerts per patient-year. Friend nudges are too frequent: 2.3–4.8 per year against a target of ≤ 2. They are a soft hint without health data, but this is open (T12).
+- **Pitch line:** "We tested a Bayesian change-point model against our rule. At the same false-alarm rate they detect the same, so we kept the simpler one and invested in more and better measurements."
+
+**Explainability of S (B20):** S is unrolled as `Σ weight_j · D_j` (weights 0.3, 0.21, 0.147, …), and every D_j splits into feature shares `w_i·z_i / √(wᵀRw)` (`state.feature_shares`, accumulated per day in `StateScore.evidence_json`). The clinician gets:
+- the exact contribution of each feature and each of the last days
+- an "older days" remainder
+- one sentence, e.g. *"Compared with the healthy normal over the last days: diary language closer to depression and more negative wording."*
+
+Code: `engine/explain.py`, `app/explanation.py`. API: `state.explanation` on every check-in and `explanation` on `GET /api/patients/{id}`.
+
+**Elevated flag (B21):** S_anchored < −1.0 for 3 scored days in a row → `elevated` badge for the clinician, never a friend nudge (possible hypomania; relevant for bipolar patients). Simulator, 12-day elevated episodes:
+
+| Check-ins/day | Episodes caught | False flags per healthy patient-year |
+|---|---|---|
+| 2 | 38/60 | ~1 |
+| 1 | 17/60 | 1.85 |
+
 ### What gives an absolute level rather than just change?
 - The text branch and the crisis flag (e.g. "I feel hopeless")
 - The corpus model (`ml/score_clip.py`) – too weak to stand alone (AUC 0.77, mic-dependent)
@@ -332,6 +364,9 @@ A good healthy baseline is **necessary but not sufficient**.
 | B16 | All check-ins of a day are combined per branch as `Σ D / √n` (Stouffer), then averaged over branches | The day score was overwritten by the last check-in (a negative diary was erased by a neutral spoken check-in later the same day). `Σ D / √n` keeps SD 1 so thresholds keep their meaning, while a real shift grows with √n: two check-ins a day halve the missed relapses in the simulator. Assumes independent noise between check-ins |
 | B17 | A feature needs ≥ `min(min_checkins, 5)` baseline values to get stats | Text features have no corpus SD to shrink toward; 1–2 written entries would give a guessed scale (fallback 1.0) |
 | B18 | A baseline only locks if at least one feature has enough values; otherwise the period is extended | Without this, a mixed baseline (3 spoken + 3 written) locked with no stats → an active baseline that could never score and is never re-anchored automatically |
+| B19 | **Keep the EWMA rule; the 3-state HMM stays an experiment** (`engine/relapse.py`, `sim/evaluate_relapse.py`) | Decision gate: at the same calibrated false-alarm rate it did not detect more relapses or earlier, and its probabilities were overconfident (P > 0.95–0.999 needed). The limit is the signal (per-patient baseline bias, noise), not the decision rule |
+| B20 | S is explained by an exact split over days and features | Explainability requirement: `S = Σ weight_j·D_j` and `D = Σ feature shares`, so every point of S traces back to a day and a feature – no hidden model |
+| B21 | Elevated flag (S_anchored < −1 for 3 days) for the clinician only | "Better than normal" can be hypomania. It must not reach friends. Simulator: 38/60 elevated episodes caught at ~1 false flag/yr with 2 check-ins/day |
 
 ---
 
@@ -359,7 +394,8 @@ A good healthy baseline is **necessary but not sufficient**.
 - [x] **T16** All check-ins of a day combined per branch (B16); simulator: 2 check-ins/day roughly halve missed relapses
 - [x] Flow fixes after the main merge: day score no longer overwritten (B16), minimum values per feature (B17), lock only with stats (B18), correct re-baselining progress (`baseline_building`)
 - [ ] **T17** A branch with too few baseline values stays unscored until a new baseline. Consider letting a branch "join" an active baseline later once it has ≥ 5 values (only if the clinician confirms the patient is still well)
-- [ ] **T12** Calibrate escalation thresholds: trade-off between detection speed and false alarms, over many simulator seeds
+- [~] **T12** Thresholds measured in the simulator (B19): clinician 0.4–1.4 false alerts/yr (OK), friends 2.3–4.8/yr (above the ≤ 2 target). Decide whether to tighten the friend rule (e.g. S > 1 for 4 days) – team decision
+- [ ] **T18** Reduce the per-patient baseline bias (the main limit found in B19): longer baseline or 2 check-ins/day during it, and include the centre's uncertainty in the scale (≈ σ·√(1 + 1.57/n))
 
 ---
 
@@ -369,7 +405,8 @@ A good healthy baseline is **necessary but not sufficient**.
 # app
 cd backend && .venv/bin/uvicorn app.main:app --reload     # :8000/docs
 cd frontend && npm run dev                                # :5173
-backend/.venv/bin/python -m pytest backend/tests          # engine + baseline tests
+backend/.venv/bin/python -m pytest backend/tests          # engine, baseline, explanation, text tests
+cd backend && .venv/bin/python -m app.sim.evaluate_relapse # decision-layer comparison (EWMA vs HMM), ~1 min
 
 # acoustic model
 bash ml/download_androids.sh                              # 3.7 GB → data/androids/ (accepts the licence)

@@ -30,6 +30,7 @@ def _series(r: dict) -> dict[str, list]:
         "S": [d["S_combined"] if d["S_combined"] is not None else -9 for d in days],
         "P": [d["p_relapse"] if d["p_relapse"] is not None else 0.0 for d in days],
         "cur": [d["level_combined"] >= 2 for d in days],
+        "cur_friends": [d["level_combined"] >= 1 for d in days],
     }
 
 
@@ -49,6 +50,7 @@ def run(noise: float, per_day: int, n_healthy=100, n_relapse=100, target=1.0, pr
     a_p, fa_p = calibrate([h["P"] for h in healthy], [x / 100 for x in range(5, 100)] + [0.995, 0.999], target)
     years = n_healthy * 365 / 365
     fa_cur = sum(_onsets(h["cur"]) for h in healthy) / years
+    fa_friends = sum(_onsets(h["cur_friends"]) for h in healthy) / years
 
     res = {m: {"missed": 0, "delay": [], "pre_fa": 0} for m in ("current", "ewma_cal", "hmm_cal")}
     for i in range(n_relapse):
@@ -62,7 +64,7 @@ def run(noise: float, per_day: int, n_healthy=100, n_relapse=100, target=1.0, pr
                 res[m]["missed"] += 1
             else:
                 res[m]["delay"].append(hit - rel)
-    out = {"thresholds": {"ewma_S": a_s, "hmm_P": a_p}, "fa_per_year": {"current": round(fa_cur, 2), "ewma_cal": round(fa_s, 2), "hmm_cal": round(fa_p, 2)}}
+    out = {"friends_fa_per_year_current": round(fa_friends, 2), "thresholds": {"ewma_S": a_s, "hmm_P": a_p}, "fa_per_year": {"current": round(fa_cur, 2), "ewma_cal": round(fa_s, 2), "hmm_cal": round(fa_p, 2)}}
     for m, r in res.items():
         out[m] = {"missed": r["missed"], "median_delay": statistics.median(r["delay"]) if r["delay"] else None}
     return out

@@ -7,7 +7,7 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from sqlmodel import Session, col, select
 
-from .. import baseline
+from .. import baseline, explanation
 from ..config import settings
 from ..db import get_session
 from ..engine import bandit, escalation, state
@@ -58,6 +58,7 @@ def _score_tracks(
     k = settings.sd_prior_strength
     D = {"anchored": {}, "rolling": {}}
     Z = {"anchored": {}, "rolling": {}}
+    shares = {"anchored": {}, "rolling": {}}
     for branch, vals in today_by_branch.items():
         model = state.load_branch(branch)
         tracks = {
@@ -68,8 +69,9 @@ def _score_tracks(
             z = state.zscores(vals, stats, model.direction)
             if z:
                 Z[track][branch] = z
-                D[track][branch] = round(state.branch_deviation(z, model), 4)
-    return {"D": D, "Z": Z}
+                shares[track][branch] = state.feature_shares(z, model)
+                D[track][branch] = round(sum(shares[track][branch].values()), 4)
+    return {"D": D, "Z": Z, "shares": shares}
 
 
 def _todays_intervention(s: Session, patient_id: int, today: date) -> InterventionOut:
@@ -147,6 +149,7 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
         today_by_branch[state.BRANCH_OF_SOURCE[source]][name] = v
 
     S_val: float | None = None
+    elevated = False
     S_track: dict[str, float | None] = {"anchored": None, "rolling": None}
     driver: str | None = None
     branch_D: dict[str, float] = {}
@@ -163,9 +166,13 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
         # combine per branch with sum/sqrt(n), then average over branches. A later check-in no longer
         # overwrites an earlier one (e.g. a negative diary followed by a neutral spoken check-in).
         day = _day_lists(score.branch_scores_json if score else None)
+        evidence = json.loads(score.evidence_json) if score and score.evidence_json else {}
         for t in day:
             for branch, d in tr["D"][t].items():
                 day[t].setdefault(branch, []).append(d)
+                sums = evidence.setdefault(t, {}).setdefault(branch, {})
+                for f, v in tr["shares"][t][branch].items():
+                    sums[f] = round(sums.get(f, 0.0) + v, 5)
         day_branch = {t: {b: round(state.combine_checkins(v), 4) for b, v in day[t].items()} for t in day}
         D_track = {t: state.daily_deviation(day_branch[t]) for t in S_track}
         prev_S = {"anchored": prev.S_anchored if prev else None, "rolling": prev.S_rolling if prev else None}
@@ -185,6 +192,15 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
             if tr["Z"][driver]:
                 score.top_features_json = json.dumps(state.top_contributors(tr["Z"][driver]))
             score.branch_scores_json = json.dumps(day)
+            score.evidence_json = json.dumps(evidence)
+            recent_anch = [x.S_anchored for x in s.exec(
+                select(StateScore).where(StateScore.patient_id == patient_id, StateScore.date < now.date())
+                .order_by(col(StateScore.date))
+            ).all() if x.S_anchored is not None][-(settings.elevated_days - 1):]
+            if S_track["anchored"] is not None:
+                recent_anch.append(S_track["anchored"])
+            score.elevated = escalation.elevated_flag(recent_anch, settings.elevated_S, settings.elevated_days)
+            elevated = score.elevated
             s.add(score)
 
     recent = [x.S for x in s.exec(
@@ -202,6 +218,7 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
 
     intervention = _todays_intervention(s, patient_id, now.date())
     s.commit()
+    why = explanation.latest_explanation(s, patient_id) if S_val is not None else None
 
     return CheckInResponse(
         checkin_id=checkin.id,
@@ -209,6 +226,7 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
         state=StateOut(
             S=S_val, level=level, branches=branch_D,
             S_anchored=S_track["anchored"], S_rolling=S_track["rolling"], driver=driver,
+            elevated=elevated, explanation=why,
         ),
         baseline=BaselineOut(**baseline.progress(s, active or building, now)),
         baseline_building=BaselineOut(**baseline.progress(s, building, now)) if building else None,

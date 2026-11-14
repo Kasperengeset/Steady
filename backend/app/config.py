@@ -25,7 +25,10 @@ class Settings(BaseSettings):
     min_feature_n: int = 5  # a feature needs this many baseline values (capped at the baseline's min_checkins)
     # Shrink personal SD toward the corpus within-person SD: sigma^2 = (n s^2 + k s0^2) / (n + k)
     sd_prior_strength: float = 5.0
-    # Relapse model (engine/relapse.py, STATUS.md «Relapse model»). Transition rates are assumptions;
+    # Elevated flag (clinician only): S_anchored < -elevated_S for elevated_days scored days in a row
+    elevated_S: float = 1.0
+    elevated_days: int = 3
+    # EXPERIMENT, not used by the app: relapse HMM (engine/relapse.py, STATUS.md B19). Transition rates are assumptions;
     # δ acoustic is read from acoustic.json (held-out detectability), δ text is a rough diary estimate.
     relapse_delta: dict[str, float] = {"acoustic": 1.58, "text": 1.5, "health": 1.5}
     relapse_h_relapse: float = 0.005  # well → relapse per day

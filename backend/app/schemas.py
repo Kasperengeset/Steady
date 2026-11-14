@@ -20,6 +20,8 @@ class StateOut(BaseModel):
     S_anchored: float | None = None  # vs the fixed healthy baseline – catches slow drift
     S_rolling: float | None = None  # vs the last 14 days (same slot) – catches abrupt change
     driver: str | None = None  # which track set S
+    elevated: bool = False  # unusually elevated vs the healthy normal – clinician only (B21)
+    explanation: dict | None = None  # exact split of S over days and features + a sentence (B20)
 
 
 class BaselineOut(BaseModel):
@@ -93,6 +95,7 @@ class PatientSummary(BaseModel):
     trend: list[float]
     driver: str | None = None
     baseline_status: str | None = None  # building | active | None
+    elevated: bool = False
 
 
 class PatientDetail(BaseModel):
@@ -100,6 +103,7 @@ class PatientDetail(BaseModel):
     scores: list[dict]
     checkins: list[dict]
     top_features: list[dict]
+    explanation: dict | None = None
 
 
 class FriendHint(BaseModel):
