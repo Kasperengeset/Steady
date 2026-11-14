@@ -25,5 +25,4 @@ data/
 *.mp3
 *.zip
 
-# Generated model weights (regenerate with ml/train_weights.py)
-backend/app/engine/weights.json
+# backend/app/engine/weights/*.json IS committed: derived coefficients, not corpus data

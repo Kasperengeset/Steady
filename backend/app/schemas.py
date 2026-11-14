@@ -14,6 +14,7 @@ class FeatureOut(BaseModel):
 class StateOut(BaseModel):
     S: float | None
     level: int
+    branches: dict[str, float] = {}  # per-branch D_b today
 
 
 class InterventionOut(BaseModel):

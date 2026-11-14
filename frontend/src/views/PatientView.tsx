@@ -88,6 +88,7 @@ export default function PatientView() {
         <details className="debug">
           <summary>Debug: trekk og tilstand</summary>
           <p>S = {result.state.S?.toFixed(2) ?? '— (bygger baseline)'} · nivå {result.state.level}</p>
+          <p>Grener: {Object.entries(result.state.branches).map(([b, d]) => `${b} ${d.toFixed(2)}`).join(' · ') || '—'}</p>
           <ul>
             {result.features.map((f) => (
               <li key={f.name}>{f.source}/{f.name}: {f.value}</li>

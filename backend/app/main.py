@@ -1,3 +1,4 @@
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -13,7 +14,16 @@ from .seed import seed
 async def lifespan(app: FastAPI):
     init_db()
     seed()
+    # Warm up the heavy models in the background so the first check-in isn't slow
+    threading.Thread(target=_warmup, daemon=True).start()
     yield
+
+
+def _warmup() -> None:
+    from .pipeline import emotion, prosody
+
+    prosody._smile()
+    emotion._model()
 
 
 app = FastAPI(title="Beyond the Clinic", lifespan=lifespan)

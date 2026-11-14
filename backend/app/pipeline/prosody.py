@@ -1,13 +1,50 @@
-"""Prosody via Parselmouth/openSMILE (eGeMAPS). STUB – returns plausible random values."""
+"""Prosody via openSMILE eGeMAPSv02 functionals (Eyben et al. 2016; Cummins et al. 2015).
 
-import random
+extract()      -> the ~6 interpretable features the state engine uses
+extract_full() -> all 88 eGeMAPS functionals (reference model in ml/train_weights.py)
+"""
+
+from functools import lru_cache
+
+import numpy as np
+
+from . import audio
+
+# app feature name -> eGeMAPS column
+MAP = {
+    "speech_rate": "VoicedSegmentsPerSec",
+    "f0_std": "F0semitoneFrom27.5Hz_sma3nz_stddevNorm",  # semitones: less gender-dependent than Hz
+    "energy": "loudness_sma3_amean",
+    "jitter": "jitterLocal_sma3nz_amean",
+    "shimmer": "shimmerLocaldB_sma3nz_amean",
+}
+
+
+@lru_cache(maxsize=1)
+def _smile():
+    import opensmile
+
+    return opensmile.Smile(
+        feature_set=opensmile.FeatureSet.eGeMAPSv02,
+        feature_level=opensmile.FeatureLevel.Functionals,
+    )
+
+
+def extract_full_signal(x: np.ndarray) -> dict[str, float]:
+    df = _smile().process_signal(x, audio.SR)
+    return {k: float(v) for k, v in df.iloc[0].items()}
+
+
+def from_full(full: dict[str, float]) -> dict[str, float]:
+    out = {name: full[col] for name, col in MAP.items()}
+    voiced, unvoiced = full["MeanVoicedSegmentLengthSec"], full["MeanUnvoicedSegmentLength"]
+    out["pause_ratio"] = unvoiced / (voiced + unvoiced) if voiced + unvoiced > 0 else 0.0
+    return out
+
+
+def extract_full(audio_path: str) -> dict[str, float]:
+    return extract_full_signal(audio.load(audio_path))
 
 
 def extract(audio_path: str) -> dict[str, float]:
-    # TODO(B, lør): parselmouth – speech rate, F0 std, pause ratio, energy
-    return {
-        "speech_rate": random.gauss(4.0, 0.4),  # syllables/s
-        "f0_std": random.gauss(30.0, 5.0),  # Hz
-        "pause_ratio": random.gauss(0.25, 0.05),
-        "energy": random.gauss(60.0, 4.0),  # dB
-    }
+    return from_full(extract_full(audio_path))

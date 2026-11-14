@@ -25,6 +25,7 @@ class FeatureSource(str, Enum):
     prosody = "prosody"
     emotion = "emotion"
     llm = "llm"
+    text = "text"
     wearable = "wearable"
 
 
@@ -68,6 +69,7 @@ class StateScore(SQLModel, table=True):
     S: float  # EWMA-smoothed state
     level: int = 0
     top_features_json: str = "[]"
+    branch_scores_json: str = "{}"  # {"acoustic": D_b, ...}
 
 
 class Arm(SQLModel, table=True):

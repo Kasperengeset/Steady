@@ -7,7 +7,7 @@ caller right after this returns – extractors must not keep references to it.
 from dataclasses import dataclass, field
 
 from ..models import FeatureSource
-from . import emotion, llm, prosody
+from . import audio, emotion, llm, prosody
 
 
 @dataclass
@@ -20,10 +20,12 @@ class PipelineResult:
 
 def extract_features(audio_path: str) -> PipelineResult:
     res = PipelineResult()
-    for name, v in prosody.extract(audio_path).items():
+    x = audio.load(audio_path)  # decode once, share between extractors
+    for name, v in prosody.from_full(prosody.extract_full_signal(x)).items():
         res.features.append((name, v, FeatureSource.prosody))
-    for name, v in emotion.extract(audio_path).items():
-        res.features.append((name, v, FeatureSource.emotion))
+    _, emo = emotion.run_signal(x)
+    for name in ("arousal", "valence"):
+        res.features.append((name, emo[name], FeatureSource.emotion))
     content = llm.analyze(audio_path)
     for name, v in content.scores.items():
         res.features.append((name, v, FeatureSource.llm))

@@ -38,7 +38,7 @@ export default function ClinicianView() {
           {/* TODO(A, lør): trendgraf + topp-3 bidragende trekk visualisert */}
           <ol>
             {selected.top_features.map((f) => (
-              <li key={f.feature}>{f.feature}: {f.contribution > 0 ? '+' : ''}{f.contribution}</li>
+              <li key={f.branch + f.feature}>{f.branch}/{f.feature}: {f.contribution > 0 ? '+' : ''}{f.contribution}</li>
             ))}
           </ol>
           <p className="muted">{selected.checkins.length} innsjekker registrert</p>

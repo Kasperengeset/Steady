@@ -57,12 +57,14 @@ async def create_checkin(
         raise HTTPException(404, "patient not found")
 
     # Raw audio lives only in a temp file and is deleted right after feature extraction.
-    suffix = os.path.splitext(audio.filename or "")[1] or ".webm"
+    suffix = os.path.splitext(audio.filename or "")[1] or ".wav"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(await audio.read())
         tmp_path = tmp.name
     try:
         result = extract_features(tmp_path)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
     finally:
         os.remove(tmp_path)
 
@@ -76,23 +78,33 @@ async def create_checkin(
     for name, value, source in result.features:
         s.add(Feature(checkin_id=checkin.id, name=name, value=value, source=source))
 
-    # State engine
-    today_vals = {name: v for name, v, _ in result.features}
-    z = state.zscores(today_vals, _baseline_history(s, patient_id, now))
-    weights = state.load_weights()
+    # State engine – one deviation per branch, then averaged over branches with data
+    history = _baseline_history(s, patient_id, now)
+    today_by_branch: dict[str, dict[str, float]] = defaultdict(dict)
+    for name, v, source in result.features:
+        today_by_branch[state.BRANCH_OF_SOURCE[source]][name] = v
+    z_by_branch: dict[str, dict[str, float]] = {}
+    branch_D: dict[str, float] = {}
+    for branch, vals in today_by_branch.items():
+        model = state.load_branch(branch)
+        z = state.zscores(vals, history, model.direction)
+        if z:
+            z_by_branch[branch] = z
+            branch_D[branch] = round(state.branch_deviation(z, model), 4)
     prev = s.exec(
         select(StateScore).where(StateScore.patient_id == patient_id, StateScore.date < now.date())
         .order_by(col(StateScore.date).desc())
     ).first()
     S_val: float | None = None
-    if z:
-        D = state.daily_deviation(z, weights)
+    D = state.daily_deviation(branch_D)
+    if D is not None:
         S_val = state.ewma(D, prev.S if prev else None, settings.ewma_alpha)
         score = s.exec(
             select(StateScore).where(StateScore.patient_id == patient_id, StateScore.date == now.date())
         ).first() or StateScore(patient_id=patient_id, date=now.date(), D=D, S=S_val)
         score.D, score.S = D, S_val
-        score.top_features_json = json.dumps(state.top_contributors(z, weights))
+        score.top_features_json = json.dumps(state.top_contributors(z_by_branch))
+        score.branch_scores_json = json.dumps(branch_D)
         s.add(score)
 
     recent = [x.S for x in s.exec(
@@ -113,7 +125,7 @@ async def create_checkin(
     return CheckInResponse(
         checkin_id=checkin.id,
         features=[FeatureOut(name=n, value=round(v, 3), source=src.value) for n, v, src in result.features],
-        state=StateOut(S=S_val, level=level),
+        state=StateOut(S=S_val, level=level, branches=branch_D),
         intervention=intervention,
         crisis=result.crisis,
     )

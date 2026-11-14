@@ -1,9 +1,10 @@
 // Mirrors backend/app/schemas.py – change both together.
+import { toWav16k } from './wav'
 
 export type Slot = 'morning' | 'evening'
 
 export interface FeatureOut { name: string; value: number; source: string }
-export interface StateOut { S: number | null; level: number }
+export interface StateOut { S: number | null; level: number; branches: Record<string, number> }
 export interface InterventionOut { arm_key: string; label: string }
 export interface CheckInResponse {
   checkin_id: number
@@ -17,7 +18,7 @@ export interface PatientDetail {
   patient: Record<string, unknown>
   scores: Record<string, unknown>[]
   checkins: Record<string, unknown>[]
-  top_features: { feature: string; contribution: number }[]
+  top_features: { branch: string; feature: string; contribution: number }[]
 }
 export interface FriendHint { show_hint: boolean; message: string }
 
@@ -29,9 +30,9 @@ async function json<T>(res: Response): Promise<T> {
 export const api = {
   health: () => fetch('/api/health').then(json<{ ok: boolean }>),
 
-  checkIn: (patientId: number, slot: Slot, audio: Blob) => {
+  checkIn: async (patientId: number, slot: Slot, audio: Blob) => {
     const fd = new FormData()
-    fd.append('audio', audio, 'checkin.webm')
+    fd.append('audio', await toWav16k(audio), 'checkin.wav')
     fd.append('patient_id', String(patientId))
     fd.append('slot', slot)
     return fetch('/api/checkins', { method: 'POST', body: fd }).then(json<CheckInResponse>)
