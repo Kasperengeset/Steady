@@ -3,12 +3,17 @@
 Contract: extract_features(audio_path) -> PipelineResult. Raw audio is deleted by the
 caller right after this returns – extractors must not keep references to it.
 extract_text_features(text) -> PipelineResult for a written diary entry.
+add_phrase(res, phrase_path, transcript) adds the fixed reading phrase (issue #21) to a spoken check-in.
 """
 
+import json
+import logging
 from dataclasses import dataclass, field
 
 from ..models import FeatureSource
-from . import audio, emotion, llm, prosody, text
+from . import audio, emotion, llm, phrase, prosody, text
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -17,6 +22,8 @@ class PipelineResult:
     transcript: str | None = None
     llm_json: str | None = None
     crisis: bool = False
+    speech_s: float | None = None  # seconds with voice energy in the free-talk memo (None for text)
+    phrase_check: dict | None = None  # reading check of the fixed phrase (pipeline/phrase.py)
 
 
 def _add_text(res: PipelineResult, txt: str) -> None:
@@ -30,6 +37,7 @@ def _add_text(res: PipelineResult, txt: str) -> None:
 def extract_features(audio_path: str) -> PipelineResult:
     res = PipelineResult()
     x = audio.load(audio_path)  # decode once, share between extractors
+    res.speech_s = round(audio.active_seconds(x), 2)
     for name, v in prosody.from_full(prosody.extract_full_signal(x)).items():
         res.features.append((name, v, FeatureSource.prosody))
     _, emo = emotion.run_signal(x)
@@ -47,6 +55,46 @@ def extract_features(audio_path: str) -> PipelineResult:
         if content.transcript:
             _add_text(res, content.transcript)
     return res
+
+
+def transcribe_phrase(phrase_path: str) -> str | None:
+    """Transcript of the phrase recording for the reading check; None without a key or on failure."""
+    content = llm.analyze(phrase_path)
+    return None if content.stub else content.transcript
+
+
+def add_phrase(res: PipelineResult, phrase_path: str, transcript: str | None) -> None:
+    """Fixed phrase (issue #21): reading check, then `phrase_` acoustic features if the read passed.
+
+    Never raises – a bad phrase recording must not cost the person their check-in. The phrase transcript
+    never reaches the text branch; only the deterministic crisis phrase list runs on it.
+    """
+    try:
+        x = audio.load(phrase_path)
+    except ValueError as e:
+        check = {"phrase_id": phrase.PHRASE_ID, "ok": False, "reason": str(e)}
+    else:
+        span = audio.speech_span(x)
+        check = phrase.reading_check(span, transcript)
+        if check["ok"]:
+            try:
+                feats = prosody.from_full(prosody.extract_full_signal(x))
+                _, emo = emotion.run_signal(x)
+            except Exception as e:  # noqa: BLE001 – keep the memo even if the phrase fails to analyse
+                log.warning("phrase features failed (%s): %s", type(e).__name__, str(e)[:200])
+                check.update(ok=False, reason="analysis failed")
+            else:
+                for name, v in feats.items():
+                    res.features.append((f"phrase_{name}", v, FeatureSource.prosody))
+                for name in ("arousal", "valence"):
+                    res.features.append((f"phrase_{name}", emo[name], FeatureSource.emotion))
+                res.features.append(("phrase_syllable_rate", check["syllables_per_s"], FeatureSource.prosody))
+    if transcript and text.crisis_hits(transcript):
+        res.crisis = True
+    res.phrase_check = check
+    payload = json.loads(res.llm_json) if res.llm_json else {}
+    payload["phrase"] = check
+    res.llm_json = json.dumps(payload)
 
 
 def extract_text_features(diary: str) -> PipelineResult:

@@ -1,7 +1,7 @@
 # STATUS – Beyond the Clinic
 
 > Living document: what is built, what we have learned about the model, which decisions we made and why, and what is left.
-> **Update this whenever something changes.** Original plan: [`docs/plan.md`](docs/plan.md). Plain-language guides with the maths kept simple: [`docs/model.pdf`](docs/model.pdf) (whole model, acoustic branch) and [`docs/text_model.pdf`](docs/text_model.pdf) (text branch, Reddit data, pre vs during COVID-19). Last update: Sat 14 Nov 2026 (branch `acoustic-model`).
+> **Update this whenever something changes.** Original plan: [`docs/plan.md`](docs/plan.md). Plain-language guides with the maths kept simple: [`docs/model.pdf`](docs/model.pdf) (whole model, acoustic branch) and [`docs/text_model.pdf`](docs/text_model.pdf) (text branch, Reddit data, pre vs during COVID-19). Last update: Sat 14 Nov 2026 (branch `science-engine`).
 
 ## Core message
 
@@ -93,6 +93,25 @@ First model version (C chosen by AUC): openSMILE features only 0.76, wav2vec2 fe
 - **The wav2vec2 reference (0.91)** may partly capture mic and room. Use **0.77** as the honest external number.
 - **Language:** the corpus is Italian. Prosody transfers reasonably across languages; content is handled by the text branch.
 - **Licence:** both Androids and the audEERING model are non-commercial only.
+
+### Reading task vs interview (T7, #21) – is read speech the better reference for the daily phrase?
+`ml/voice/reading_vs_interview.py` → [`ml/reports/voice/reading_vs_interview.md`](ml/reports/voice/reading_vs_interview.md). Androids has one reading per speaker (~48 s, the same fairy tale), so each is cut into 5 equal parts (~10 s, like the ~9 s phrase); a two-way model (speaker + part) removes the text effect.
+
+| | Interview | Reading |
+|---|---|---|
+| AUC, our 8 features | **0.77 ± 0.08** | 0.68 ± 0.14 (whole file), 0.71 ± 0.13 (5 parts) |
+| AUC, 88 eGeMAPS | 0.88 | 0.83 |
+| Within-person SD | – | **1.5× smaller** (median over features; energy 2.4×, arousal 2.1×) |
+| ICC (median) | 0.52 | **0.72** |
+| Detectability, equal weights (held-out) | 1.58 | 1.69 (folds 0.5–3.5 → a tie) |
+| Directions vs engine | all 8 agree | `pause_ratio` **flips**; `jitter`, `shimmer` ~no group difference |
+
+- **Read speech is steadier, not more informative.** Depression also moves it less, so the net signal-to-noise is the same. Between people, reading separates worse, and interview + reading together (0.71) is no better than interview alone.
+- **For the phrase:** steadiness is exactly what a fixed phrase is for, so the reading parts are the right corpus prior for `phrase_*` features (within-person SD for B15, correlation for B12), never the interview clips (B28). Only 5 phrase candidates: `energy`, `arousal`, `valence`, `f0_std`, `speech_rate`.
+- **Not shown:** that the phrase is steadier than free talk from *day to day*. That is the phrase check below.
+
+### Phrase check (#21) – ready for recording
+`ml/voice/phrase_check.py <folder>` takes our own recordings only (refuses corpus paths). File names: `<person>_<YYYYMMDD>-<HHMM>_<phrase|free>.<ext>`, e.g. `kasper_20261114-0930_phrase.m4a` + `kasper_20261114-0930_free.m4a`; 5 sessions per person at different times of day; keep the folder under `recorded_voice/` (gitignored). It reports the within-person SD ratio phrase/free per feature (pooled, per person, F-test, 90 % CI), the phrase–free correlation and the hour slope → `ml/reports/voice/phrase_check.md` (summary statistics only). **Gate (B29, set before recording):** weight only if the 90 % CI of the SD ratio is below 1, the ratio is below 1 for every person, ≥ 2 people × ≥ 4 sessions, and the feature is a B28 candidate. With 2 × 5 sessions only a ratio below ~0.54 passes.
 
 ---
 
@@ -260,6 +279,33 @@ Code: `engine/explain.py`, `app/explanation.py`. API: `state.explanation` on eve
 |---|---|---|
 | 2 | 38/60 | ~1 |
 | 1 | 17/60 | 1.85 |
+
+### Engine design checks for random prompts (#27)
+`backend/app/sim/evaluate_design.py` → [`ml/reports/engine/design_checks.md`](ml/reports/engine/design_checks.md). Same seeded patients in every row, 100 healthy patient-years + 100 relapses; "calibrated" = S threshold set to ≤ 1 false clinician onset per healthy patient-year (as B19). New simulator options are off by default (old output reproduced exactly).
+
+**Time of day** (one prompt a day, uniform 09–21, a personal morning→evening shift of `effect` within-person SDs). Missed of 100, calibrated:
+
+| Noise | Effect | One slot | Two slots at 14:00 (slot needs 10, app now) | Two slots (slot needs 5) | One slot + hour as covariate |
+|---|---|---|---|---|---|
+| ×1.0 | 0 | 28 | 30 | 26 | 25 |
+| ×1.0 | 0.5 SD | 25 | 27 | 27 | 23 |
+| ×1.0 | 1.0 SD | 31 | 32 | 28 | **17** |
+| ×1.5 | 0–1.0 SD | 51–53 | 50–58 | 48–52 | 50–52 |
+
+- Two slots do not help and cost false alarms under the current rule (1.4–2.3 false clinician alerts/yr vs ~1.0 with one slot): with ~6 morning and ~8 evening values per baseline, slots are noisy, and the rolling track (≥ 7 per slot) is often missing.
+- The hour as a covariate (per-feature slope on the healthy baseline, ridge-shrunk with k = 5) is never worse and clearly better when the day curve is strong (B30).
+
+**Extra unprompted check-ins** (noise ×1.5). "Shared" = the part of the noise variance common to all check-ins of one day; B16 assumes 0.
+
+| Shared | 1 prompted only | + 1.5 extras/day, count fully (B16) | half weight | context only |
+|---|---|---|---|---|
+| 0 | 53 missed · 1.1 FA/yr | 21 · 0.5 | 22 · 0.4 | 37 · 0.2 |
+| 0.3 | 61 · 0.8 | 32 · **1.5** | 31 · 1.2 | 42 · 0.3 |
+| 0.6 | 53 · 0.7 | 40 · **2.9** | 41 · 2.2 | 45 · 0.3 |
+
+(missed of 100 calibrated · false clinician alerts/yr with the current rule). Extras do add detection, but with shared day noise counting them fully pushes false alarms above target; half weight keeps most of the gain with fewer false alarms (B31). The same holds for B16's 2 scheduled check-ins/day: shared 0.6 gives 2.1 false alerts/yr.
+
+**Engagement signal** (adherence 0.85 − drop × latent d, optional busy spells): at the same calibrated false-alarm rate it is **worse in every setting** (72–92 missed vs 47–82 without). Under the uncalibrated rule it seems to catch more (3–26 missed) only because false alerts rise to 3–5/yr. Missed days are frequent and noisy compared with the slow acoustic drift (B32). Memo length was not simulated: Androids depressed speakers talked *longer* (18.6 s vs 10.5 s), so there is no supported direction.
 
 ### ⭐ Where the numbers come from – what is data, what is chosen
 Three kinds of numbers decide whether a change counts as "depression-like":
@@ -434,6 +480,11 @@ A good healthy baseline is **necessary but not sufficient**.
 | B24 | **Rewards are reconciled from the stored history** (`rewards.sync`), with one keyed ledger row per reward (`memo:<day>`), never revoked | No hook in the check-in upload, seeded demo data earns like live use, and a demo prompt resend or a changed answer can never take a reward back. Rewards read only *that* and *how long* someone checked in, never S, features or content, so a bad day earns the same as a good day. A spoken memo needs ≥ 10 s of speech (`CheckIn.speech_s` from #22), a written one ≥ 20 words. Gentle streak: one rest day per 7 days |
 | B25 | **The circle shows an allow-list, opt-in per item, anonymous by default, behind its own consent** | Health data is special-category data (GDPR). Each member card is built field by field (`_member_card`); a test fails if any score, feature, diary or transcript field appears. Preset reactions only (no free text). The friends nudge reaches the circle as a "reach out" card after a 30 min hold the patient can cancel; the clinician side of the ladder is unchanged |
 | B26 | **The avatar's check-ins are rules plus reviewed lines, at most one a day, and it stops after 3 missed days** | Companion, not clinician: it reads only check-in days and memo lengths, waits for the day's prompt time, respects quiet hours and pause, and never mentions gaps, scores or the clinic (lines are tested against a banned list). After that the clinician may see "avatar checked in, no answer for N days" as context, never as an alert or escalation. Crisis words in a reply or a circle profile run the check-in crisis path (`app/safety.py`) |
+| B28 | Phrase features take their corpus prior from the **reading task**, not the interview; only `energy`, `arousal`, `valence`, `f0_std`, `speech_rate` are phrase candidates | Androids reading (5 parts per speaker): within-person SD 1.5× smaller, ICC 0.72 vs 0.52, same net detectability (1.69 vs 1.58 held-out, a tie), AUC lower (0.68–0.71 vs 0.77). `pause_ratio` flips direction in read speech, `jitter`/`shimmer` keep no group difference (`ml/reports/voice/reading_vs_interview.md`) |
+| B29 | Gate for phrase weights, set **before** recording: 90 % CI of the SD ratio phrase/free below 1, below 1 for every person, ≥ 2 people × ≥ 4 sessions, a B28 candidate. Until then weight 0 | 2 people × 5 sessions can only show a large difference (ratio < ~0.54); a lenient gate would tune the engine to 2 voices (B13) |
+| B30 | **Random prompt times: one slot, with the hour as a covariate** (per-feature slope fitted on the healthy baseline, shrunk toward 0 with k = 5); no morning/evening split | Simulator (#27): two slots at 14:00 never helped and raised false clinician alerts to 1.4–2.3/yr; the covariate was never worse and with a strong day curve missed 17 vs 31 of 100 (`ml/reports/engine/design_checks.md`) |
+| B31 | Extra unprompted check-ins count at **half weight** (`Σ w·D / √Σ w²`, prompted w = 1, extras w = 0.5) | Counting fully (B16) is right only if same-day noise is independent; with 30–60 % shared day noise it gave 1.5–2.9 false clinician alerts/yr. Half weight keeps most of the detection gain (31 vs 32 missed at shared 0.3) with fewer false alarms. Context-only throws the gain away |
+| B32 | **Engagement stays out of S** (weight 0); it is used only by the avatar check-ins (#25) | At the same calibrated false-alarm rate it missed more relapses in every scenario (72–92 vs 47–82 of 100). Its apparent gain under the uncalibrated rule came from 3–5 false alerts/yr |
 
 ---
 
@@ -449,7 +500,10 @@ A good healthy baseline is **necessary but not sufficient**.
 - [ ] **T4** Health branch: Fitbit/Google Health adapter, weights from the Depresjon dataset (minute-level activity, MADRS) (GitHub issues #5, #10)
 - [ ] **T5** What to show before the healthy baseline is locked (population norms?)
 - [ ] **T6** Consider down-weighting `energy` because of mic dependence
-- [ ] **T7** Run the reading task as an extra check (`--task reading --no-write`)
+- [x] **T7** Reading task vs interview (`ml/voice/reading_vs_interview.py`, §2): reading is steadier (1.5× smaller within-person SD) but separates worse (AUC 0.68–0.71 vs 0.77); it is the prior for phrase features (B28)
+- [ ] **T25 (Kasper, Mahdan)** Record the phrase check: 5 sessions each (phrase + 30 s free talk, different times of day), then `ml/voice/phrase_check.py recorded_voice/phrase_check` → gate B29
+- [ ] **T26** Implement B30 (hour covariate from `CheckIn.local_hour`) and B31 (extras at half weight) in `baseline.py`/`engine/state.py` after PR #29 is merged
+- [ ] **T27** Measure the shared same-day noise (2 check-ins on one day vs across days) once real data exists: it decides whether B16/B31 hold
 - [ ] **T8** Bandit reward: "did the state improve?" (`S_{t+1} < S_t`) is not wired in (`routers/interventions.py`)
 - [x] **T9** Test with our own recordings: 8 clips from Kasper and Mahdan (see «Smoke test»)
 - [x] **T10** ≥ 7 check-ins for the rolling track; morning and evening separately in both tracks
@@ -464,6 +518,8 @@ A good healthy baseline is **necessary but not sufficient**.
 - [~] **T12** Thresholds measured in the simulator (B19): clinician 0.4–1.4 false alerts/yr (OK), friends 2.3–4.8/yr (above the ≤ 2 target). Decide whether to tighten the friend rule (e.g. S > 1 for 4 days) – team decision
 - [ ] **T19 (Mahdan)** Text branch context: Gemini content scores (mood, energy_self, anhedonia, social_contact, the writer's own current state, with evidence quotes, English + Norwegian, `store=False`) next to `text_logit`. Validate on a team-written context set (~40 entries: recovery stories, other people's feelings, negations, sarcasm, masked low mood, style-matched pairs, Norwegian) plus a consistency check (5 repeated calls). Weight > 0 only if it fixes the context cases without hurting the plain ones
 - [ ] **T18** Reduce the per-patient baseline bias (the main limit found in B19): longer baseline or 2 check-ins/day during it, and include the centre's uncertainty in the scale (≈ σ·√(1 + 1.57/n))
+- [x] **T20 (#21, backend)** Fixed phrase + 30 s memo: optional `phrase` file on `POST /api/checkins` (old clients keep working), `phrase_*` features, WER gate, tests in `backend/tests/test_phrase.py` (B22). Frontend two-step flow waits for #19 on main
+- [x] **T21 (#22, backend)** Daily prompt: `DailyPrompt` + `PromptSettings` (`models_prompt.py`), `GET /api/patients/{id}/prompt`, `POST …/prompt/now` (demo), `PUT …/prompt/settings` (quiet hours, pause today, off), nullable `CheckIn.prompt_at`, `local_hour`, `speech_s` (old `app.db` files get them via `db.add_missing_columns()`), tests in `backend/tests/test_prompt.py` (B23). Banner + demo button wait for #19. Web Push (P2) backend done: `app/push.py`, `/api/patients/{id}/push` (status, subscribe, unsubscribe, test), sent once per prompt inside the on-time window and never in quiet hours/pause/off, fixed text with no health data, dead devices removed, background sender only with VAPID keys in `.env` (`scripts/gen_vapid.py`); tests in `backend/tests/test_push.py`. The service worker waits for #19
 - [x] **T22** Rewards and habits (#24): `RewardLedger`, `rewards.py` (earn, `spend()` for the shop, balance, XP = total earned, gentle streak, level hint), `GET /patients/{id}/rewards`, `GET /patients/{id}/habits/week`, `POST /patients/{id}/habits/action` (= the bandit's follow-up). Custom and Fitbit habits are P2. Frontend waits for #19
 - [x] **T23** Minimal circle (#26): `Profile`, `Circle`, `Membership`, `Reaction`, invite by code, feed, preset reactions, held and cancellable friends card, no-health-data test. Frontend waits for #19
 - [x] **T24** Avatar check-ins (#25): `engine/companion.py`, `companion_lines.json`, `GET /patients/{id}/companion` (`{message, kind, at}`), reply with crisis check, `GET /patients/{id}/companion/context` for the clinician portal. P3 (Gemini wording) not started

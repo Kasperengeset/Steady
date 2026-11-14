@@ -5,6 +5,7 @@ from datetime import date as Date
 from pydantic import BaseModel
 
 from .models import Slot
+from .schemas_prompt import PromptAnswerOut
 
 
 class FeatureOut(BaseModel):
@@ -66,6 +67,8 @@ class CheckInResponse(BaseModel):
     baseline_building: BaselineOut | None = None  # a new baseline being built (while the old one still scores)
     intervention: InterventionOut
     crisis: bool
+    prompt: PromptAnswerOut | None = None  # this check-in answered today's daily prompt (#22)
+    phrase: dict | None = None  # reading check of the fixed phrase, if one was uploaded (#21)
 
 
 class TextCheckInIn(BaseModel):

@@ -46,6 +46,15 @@ class SimArm:
     b: float = 1.0
 
 
+def _combine(weighted: list[tuple[float, float]]) -> float | None:
+    """Day combination of (weight, D) pairs: Σ w·D / √(Σ w²). All weights 1 → Σ D / √n (B16)."""
+    if not weighted:
+        return None
+    if all(w == 1.0 for w, _ in weighted):
+        return state.combine_checkins([v for _, v in weighted])
+    return sum(w * v for w, v in weighted) / sum(w * w for w, _ in weighted) ** 0.5
+
+
 def _first_run(flags: list[bool], start: int, run: int) -> int | None:
     for t in range(start, len(flags) - run + 1):
         if all(flags[t : t + run]):
@@ -65,8 +74,24 @@ def simulate(
     elevated_day: int | None = None,
     elevated_len: int = 10,
     relapse_params: "relapse.Params | None" = None,
+    # --- #27 design checks. Defaults reproduce the original simulator exactly. -----------------
+    prompt_hours: tuple[float, float] | None = None,  # check-in hour ~ U(a, b); None = no time of day
+    tod_effect: float = 0.0,  # person's morning→evening half-range per feature ~ N(0, tod_effect × within SD)
+    tod_mode: str = "one_slot",  # "one_slot" | "two_slots" | "hour_covariate"
+    slot_split: float = 14.0,
+    slot_min_n: int | None = None,  # baseline values a slot needs (app: healthy_min_checkins)
+    day_shared: float = 0.0,  # share of the noise variance common to all check-ins of one day
+    extra_rate: float = 0.0,  # unprompted extra check-ins per day ~ Poisson(extra_rate)
+    extra_weight: float = 1.0,  # 1 = count fully (B16), 0.5 = partly, 0 = context only
+    adherence: float | None = None,  # P(scheduled check-in done) on a healthy day; None = always
+    adherence_drop: float = 0.0,  # P drops by adherence_drop × latent d
+    busy_rate: float = 0.0,  # P(a busy spell starts) per day; a spell lasts ~5 days, adherence − 0.4
+    engagement_weight: float = 0.0,  # weight of the engagement signal next to the acoustic D (anchored track)
 ) -> dict:
     rng = random.Random(seed)
+    # Separate stream for the #27 options, so the original streams (and results) are unchanged
+    xrng = np.random.default_rng([seed, 27])
+    slot_min_n = settings.healthy_min_checkins if slot_min_n is None else slot_min_n
     model = state.load_branch("acoustic")
     stats = model.meta.get("feature_stats")
     if not stats:
@@ -81,13 +106,31 @@ def simulate(
     wsd = np.array([stats[f]["within_sd"] for f in wc["features"]]) * day_noise_factor
     nrng = np.random.default_rng(seed)
     arms = [SimArm(k) for k in ARMS]
+    tod_amp = {f: xrng.normal(0, tod_effect * stats[f]["within_sd"]) for f in feats}  # this person's day curve
 
     d, hist_d = 0.1, []
     history: list[dict[str, float]] = []
+    meta: list[tuple[int, float | None]] = []  # (day, hour) per history entry
     out = []
     S_roll = S_anch = None
     post: dict[str, float] | None = None  # relapse model posterior (engine/relapse.py)
     anchor: dict[str, list[float]] | None = None
+    anchor_slot: dict[str, dict] = {}
+    slope: dict[str, float] = {}
+    h0 = 15.0
+    answered: list[int] = []  # scheduled check-ins done per day (engagement)
+    p_hat: float | None = None
+    busy_left = 0
+    level = {k: 0 for k in TRACKS}
+
+    def slot_of(h: float | None) -> str:
+        return "all" if h is None else ("morning" if h < slot_split else "evening")
+
+    def adj(x: dict[str, float], h: float | None) -> dict[str, float]:
+        """Hour as a covariate: remove the slope fitted on the healthy baseline."""
+        if tod_mode != "hour_covariate" or h is None or not slope:
+            return x
+        return {f: v - slope.get(f, 0.0) * (h - h0) for f, v in x.items()}
 
     for t in range(days):
         # --- latent course -------------------------------------------------------------
@@ -97,44 +140,105 @@ def simulate(
             target = -0.75  # elevated episode: voice shifts the opposite way (energetic, positive)
         d = min(1.0, max(-1.0, 0.7 * d + 0.3 * target + rng.gauss(0, 0.04)))
 
-        # --- spoken check-ins → features (morning, evening, ...) -------------------------
-        xs = []
-        for _ in range(checkins_per_day):
-            noise = dict(zip(wc["features"], wsd * (chol @ nrng.standard_normal(len(order)))))
+        # --- spoken check-ins → features (morning, evening, extras ...) ------------------
+        busy = False
+        if busy_rate:
+            if busy_left == 0 and xrng.random() < busy_rate:
+                busy_left = int(xrng.geometric(1 / 5))
+            busy, busy_left = busy_left > 0, max(0, busy_left - 1)
+        p_do = None if adherence is None else min(1.0, max(0.0, adherence - adherence_drop * max(d, 0.0) - 0.4 * busy))
+        e_day = chol @ xrng.standard_normal(len(order)) if day_shared else None
+        n_extra = int(xrng.poisson(extra_rate)) if extra_rate else 0
+        xs, hs, ws = [], [], []
+        done = 0
+        for i in range(checkins_per_day + n_extra):
+            scheduled = i < checkins_per_day
+            e = chol @ (nrng if scheduled else xrng).standard_normal(len(order))
+            if e_day is not None:
+                e = (1 - day_shared) ** 0.5 * e + day_shared**0.5 * e_day
+            noise = dict(zip(wc["features"], wsd * e))
+            if scheduled and p_do is not None and xrng.random() >= p_do:
+                continue  # missed this check-in
+            done += scheduled
+            h = None if prompt_hours is None else float(xrng.uniform(*prompt_hours))
+            g = 0.0 if h is None else (h - 15.0) / 6.0  # −1 at 09:00, +1 at 21:00
             xs.append({
-                f: offset[f] + s["control_mean"] + d * (s["patient_mean"] - s["control_mean"]) + noise[f]
+                f: offset[f] + s["control_mean"] + d * (s["patient_mean"] - s["control_mean"]) + noise[f] + tod_amp[f] * g
                 for f, s in stats.items()
             })
-        x = xs[0]
+            hs.append(h)
+            ws.append(1.0 if scheduled else extra_weight)
+        answered.append(done)
+        x = xs[0] if xs else None
 
         # --- engine: rolling baseline (as in the app) and anchored baseline (T1) --------
         # Same functions as the app: median/MAD shrunk toward corpus SD, rolling needs >= rolling_min_n
-        window = history[-baseline_days * checkins_per_day:]
-        roll_stats = state.history_stats({f: [h[f] for h in window] for f in feats}, model, K, settings.rolling_min_n)
-        if len(history) == baseline_days * checkins_per_day and anchor is None:  # healthy period over → lock
-            anchor = state.history_stats({f: [h[f] for h in history] for f in feats}, model, K, 1)
+        window = [i for i, (day, _) in enumerate(meta) if day >= t - baseline_days]
+        roll_cache: dict[str, dict] = {}
+
+        def roll_stats(h: float | None) -> dict:
+            key = slot_of(h) if tod_mode == "two_slots" else "all"
+            if key not in roll_cache:
+                idx = [i for i in window if key == "all" or slot_of(meta[i][1]) == key]
+                vals = [adj(history[i], meta[i][1]) for i in idx]
+                roll_cache[key] = state.history_stats({f: [v[f] for v in vals] for f in feats}, model, K, settings.rolling_min_n)
+            return roll_cache[key]
+
+        if anchor is None and t >= baseline_days and len(history) >= min(settings.healthy_min_checkins, baseline_days * checkins_per_day):
+            hours = [h for _, h in meta]
+            if tod_mode == "hour_covariate" and None not in hours:
+                # Per-feature slope on the hour, ridge-shrunk toward 0 by K pseudo-values (Var U(9,21) = 12)
+                h0 = statistics.fmean(hours)
+                hh = np.array(hours) - h0
+                for f in feats:
+                    v = np.array([e[f] for e in history])
+                    slope[f] = float(hh @ (v - v.mean()) / (hh @ hh + K * 12.0))
+            base = [adj(e, h) for e, (_, h) in zip(history, meta)]  # healthy period over → lock
+            anchor = state.history_stats({f: [e[f] for e in base] for f in feats}, model, K, 1)
+            if tod_mode == "two_slots":
+                for sl in ("morning", "evening"):
+                    sub = [e for e, (_, h) in zip(base, meta) if slot_of(h) == sl]
+                    anchor_slot[sl] = state.history_stats({f: [e[f] for e in sub] for f in feats}, model, K, slot_min_n)
+            if adherence is not None:
+                p_hat = min(0.95, max(0.05, sum(answered[:-1]) / (len(answered[:-1]) * checkins_per_day)))
         # Each check-in gets its own D; the day combines them per branch with sum/sqrt(n) as the app (B16)
         D_rolls, D_anchs = [], []
-        for xi in xs:
-            z_roll = state.zscores(xi, roll_stats, model.direction)
-            z_anch = state.zscores(xi, anchor, model.direction) if anchor else {}
+        for xi, h, w in zip(xs, hs, ws):
+            if w == 0:
+                continue  # extra check-in kept as context only
+            xa = adj(xi, h)
+            z_roll = state.zscores(xa, roll_stats(h), model.direction)
+            z_anch = state.zscores(xa, {**anchor, **anchor_slot.get(slot_of(h), {})}, model.direction) if anchor else {}
             if z_roll:
-                D_rolls.append(state.branch_deviation(z_roll, model))
+                D_rolls.append((w, state.branch_deviation(z_roll, model)))
             if z_anch:
-                D_anchs.append(state.branch_deviation(z_anch, model))
-        D_roll = state.combine_checkins(D_rolls) if D_rolls else None
-        D_anch = state.combine_checkins(D_anchs) if D_anchs else None
+                D_anchs.append((w, state.branch_deviation(z_anch, model)))
+        D_roll = _combine(D_rolls)
+        D_anch = _combine(D_anchs)
+        D_eng = None
+        if p_hat is not None:  # engagement: today's share of scheduled check-ins vs the healthy baseline rate
+            D_eng = (p_hat - done / checkins_per_day) / (p_hat * (1 - p_hat) / checkins_per_day) ** 0.5
         if D_anch is not None:  # same evidence the app uses: anchored D, combined over the day's check-ins
             post = relapse.step(post, {"acoustic": D_anch}, {"acoustic": len(D_anchs)}, prm=relapse_params).posterior
-        if D_roll is not None:
+        if engagement_weight and D_eng is not None:
+            we = engagement_weight
+            D_anch = D_eng if D_anch is None else (D_anch + we * D_eng) / (1 + we**2) ** 0.5
+        scored_roll, scored_anch = D_roll is not None, D_anch is not None
+        if scored_roll:
             S_roll = state.ewma(D_roll, S_roll, 0.3)
-        if D_anch is not None:
+        if scored_anch:
             S_anch = state.ewma(D_anch, S_anch, 0.3)
-        recent_roll = [r["S_rolling"] for r in out if r["S_rolling"] is not None][-6:] + ([S_roll] if S_roll is not None else [])
-        recent_anch = [r["S_anchored"] for r in out if r["S_anchored"] is not None][-6:] + ([S_anch] if S_anch is not None else [])
+        recent_roll = [r["S_rolling"] for r in out if r["S_rolling"] is not None][-6:] + ([S_roll] if scored_roll else [])
+        recent_anch = [r["S_anchored"] for r in out if r["S_anchored"] is not None][-6:] + ([S_anch] if scored_anch else [])
         # App behaviour: once the healthy baseline is locked, S = max(S_anchored, S_rolling)
-        S_comb = max((v for v in (S_anch, S_roll) if v is not None), default=None) if anchor else None
+        scored_comb = bool(anchor) and (scored_roll or scored_anch)
+        S_comb = max((v for v in (S_anch, S_roll) if v is not None), default=None) if scored_comb else None
         recent_comb = [r["S_combined"] for r in out if r["S_combined"] is not None][-6:] + ([S_comb] if S_comb is not None else [])
+        # A day without a score keeps the previous level (the app only re-evaluates on a check-in)
+        for k, sc, rec in (("rolling", scored_roll, recent_roll), ("anchored", scored_anch, recent_anch),
+                           ("combined", S_comb is not None, recent_comb)):
+            if sc:
+                level[k] = escalation.evaluate_level(rec, False)
 
         # --- self-report (lagged) -------------------------------------------------------
         hist_d.append(d)
@@ -153,23 +257,26 @@ def simulate(
             d = max(0.0, d - 0.03)
 
         history.extend(xs)
+        meta.extend((t, h) for h in hs)
         out.append({
             "day": t,
             "latent": round(d, 3),
             "self_mood": self_mood,
-            "S_rolling": None if S_roll is None else round(S_roll, 3),
-            "S_anchored": None if S_anch is None else round(S_anch, 3),
-            "level_rolling": escalation.evaluate_level(recent_roll, False) if S_roll is not None else 0,
-            "level_anchored": escalation.evaluate_level(recent_anch, False) if S_anch is not None else 0,
+            "S_rolling": round(S_roll, 3) if scored_roll else None,
+            "S_anchored": round(S_anch, 3) if scored_anch else None,
+            "level_rolling": level["rolling"],
+            "level_anchored": level["anchored"],
             "S_combined": None if S_comb is None else round(S_comb, 3),
             "D_anchored": None if D_anch is None else round(D_anch, 4),
             "p_relapse": None if post is None else round(post["relapse"], 4),
             "p_elevated": None if post is None else round(post["elevated"], 4),
-            "level_combined": escalation.evaluate_level(recent_comb, False) if S_comb is not None else 0,
+            "level_combined": level["combined"],
+            "checkins": len(xs),
+            "D_engagement": None if D_eng is None else round(D_eng, 4),
             "arm": arm.key,
             "completed": completed,
             "reward": round(r, 3),
-            "features": {f: round(v, 4) for f, v in x.items()},
+            "features": None if x is None else {f: round(v, 4) for f, v in x.items()},
         })
 
     # --- summary: who notices first? -----------------------------------------------------
