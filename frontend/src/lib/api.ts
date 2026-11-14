@@ -1,5 +1,6 @@
 // Mirrors backend/app/schemas.py – change both together.
 import { toWav16k } from './wav'
+import type { Reward } from './companion'
 
 export type Slot = 'morning' | 'evening'
 
@@ -11,7 +12,7 @@ export interface StateOut {
   S_anchored: number | null // vs fixed healthy baseline – slow drift
   S_rolling: number | null // vs last 14 days, same slot – abrupt change
   driver: 'anchored' | 'rolling' | null
-  elevated: boolean // unusually elevated vs healthy normal – clinician only
+  elevated: boolean
   explanation: Explanation | null
 }
 export interface BaselineOut {
@@ -39,6 +40,9 @@ export interface CheckInResponse {
   baseline_building: BaselineOut | null // a new baseline being built while the old one still scores
   intervention: InterventionOut
   crisis: boolean
+  rewards?: Reward[]
+  prompt?: { answered: boolean; on_time: boolean; prompt_at: string; late_by_s: number } | null
+  phrase?: { ok?: boolean; reason?: string | null; phrase_id?: string; checked_by?: string; wer?: number | null } | null
 }
 export interface PatientSummary {
   id: number
@@ -57,16 +61,21 @@ export interface PatientDetail {
   top_features: { branch: string; feature: string; contribution: number }[]
   explanation: Explanation | null
 }
-/** Exact split of S over days and features (backend engine/explain.py). */
 export interface Explanation {
-  track: 'anchored' | 'rolling'
-  S: number
+  track: 'anchored' | 'rolling'; S: number
   by_day: { date: string; D: number; weight: number; contribution: number }[]
-  by_feature: Record<string, number>
-  older: number
-  sentence: string
+  by_feature: Record<string, number>; older: number; sentence: string
 }
 export interface FriendHint { show_hint: boolean; message: string }
+export interface WearableDay {
+  active_minutes?: number // recorded workout active duration; fallback to step cadence when unavailable
+  minute_steps?: number[] // 1440 values from 00:00
+  steps?: number
+  sleep_hours?: number
+  sleep_midpoint?: number // hours after midnight
+  resting_hr?: number
+  hrv_rmssd?: number
+}
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`)
@@ -76,20 +85,31 @@ async function json<T>(res: Response): Promise<T> {
 export const api = {
   health: () => fetch('/api/health').then(json<{ ok: boolean }>),
 
-  checkIn: async (patientId: number, slot: Slot, audio: Blob) => {
+  checkIn: async (patientId: number, slot: Slot, audio: Blob, phrase?: Blob, requestId?: string) => {
     const fd = new FormData()
-    fd.append('audio', await toWav16k(audio), 'checkin.wav')
+    // useRecorder already gives 16 kHz WAV; anything else (an uploaded file) is converted first.
+    fd.append('audio', audio.type === 'audio/wav' ? audio : await toWav16k(audio), 'checkin.wav')
+    if (phrase) fd.append('phrase', phrase.type === 'audio/wav' ? phrase : await toWav16k(phrase), 'phrase.wav')
     fd.append('patient_id', String(patientId))
     fd.append('slot', slot)
-    return fetch('/api/checkins', { method: 'POST', body: fd }).then(json<CheckInResponse>)
+    return fetch('/api/checkins', { method: 'POST', body: fd, ...(requestId ? { headers: { 'Idempotency-Key': requestId } } : {}) }).then(json<CheckInResponse>)
   },
 
+  /** One day of wearable data – health branch. Send what the device has. */
+  checkInWearable: (patientId: number, day: WearableDay, slot: Slot = 'morning') =>
+    fetch('/api/checkins/wearable', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ patient_id: patientId, slot, ...day }),
+    }).then(json<CheckInResponse>),
+
   /** Written diary entry – text branch only. English, 50 to 100 words works best. */
-  checkInText: (patientId: number, slot: Slot, text: string) =>
+  checkInText: (patientId: number, slot: Slot, text: string, requestId?: string) =>
     fetch('/api/checkins/text', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ patient_id: patientId, slot, text }),
+      ...(requestId ? { headers: { 'content-type': 'application/json', 'Idempotency-Key': requestId } } : {}),
     }).then(json<CheckInResponse>),
 
   feedback: (patientId: number, date: string, completed: boolean, rating: number | null) =>
@@ -97,7 +117,7 @@ export const api = {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ patient_id: patientId, date, completed, rating }),
-    }).then(json<{ reward: number }>),
+    }).then(json<{ reward: number; rewards?: Reward[] }>),
 
   patients: () => fetch('/api/patients').then(json<PatientSummary[]>),
   patient: (id: number) => fetch(`/api/patients/${id}`).then(json<PatientDetail>),

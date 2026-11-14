@@ -45,6 +45,6 @@ def mark_action(pid: int, body: ActionDoneIn, s: Session = Depends(get_session))
     s.commit()
     return {
         "bandit_reward": fb.reward,
-        "earned": [{"reason": r.reason, "label": rewards.LABELS[r.reason], "amount": r.amount} for r in earned],
+        "earned": [*fb.rewards, *[{"reason": r.reason, "label": rewards.LABELS[r.reason], "amount": r.amount} for r in earned]],
         "balance": rewards.balance(s, pid),
     }

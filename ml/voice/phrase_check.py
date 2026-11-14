@@ -208,7 +208,7 @@ tests noise, not whether depression still shows in a read phrase (for that, see
 `reading_vs_interview.md`). One phone and room per person.
 """
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
     return text
 
 

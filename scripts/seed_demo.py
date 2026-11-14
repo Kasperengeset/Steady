@@ -30,6 +30,9 @@ from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 REPO = Path(__file__).resolve().parents[1]
 TZ = ZoneInfo("Europe/Helsinki")
 

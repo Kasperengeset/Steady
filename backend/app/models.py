@@ -4,6 +4,7 @@ from datetime import date as Date
 from datetime import datetime, timezone
 from enum import Enum
 
+from sqlalchemy import UniqueConstraint
 from sqlmodel import Field, SQLModel
 
 
@@ -34,6 +35,7 @@ class Patient(SQLModel, table=True):
     name: str
     created_at: datetime = Field(default_factory=now)
     risk_level: int = 0  # current escalation level 0/1/2, 3 = crisis
+    demo_key: str | None = Field(default=None, index=True, unique=True)
 
 
 class Contact(SQLModel, table=True):
@@ -44,6 +46,8 @@ class Contact(SQLModel, table=True):
 
 
 class CheckIn(SQLModel, table=True):
+    __table_args__ = (UniqueConstraint("patient_id", "request_key", name="uq_checkin_request"),)
+
     id: int | None = Field(default=None, primary_key=True)
     patient_id: int = Field(foreign_key="patient.id", index=True)
     ts: datetime = Field(default_factory=now)
@@ -54,6 +58,10 @@ class CheckIn(SQLModel, table=True):
     prompt_at: datetime | None = None  # UTC time of the daily prompt this check-in answered (#22), else None
     local_hour: float | None = None  # actual time of the check-in as a local decimal hour, e.g. 14.5 (#22, #27)
     speech_s: float | None = None  # seconds with voice energy in the memo (None for written diaries)
+    request_key: str | None = None
+    response_json: str | None = None  # replay the original response after a network retry
+    analysis_json: str | None = None  # immutable measurements and decisions captured at ingestion
+    data_origin: str | None = None  # live | synthetic; legacy unmarked rows remain unknown
 
 
 class Feature(SQLModel, table=True):
@@ -146,3 +154,5 @@ class Escalation(SQLModel, table=True):
     level: int
     recipient: ContactKind
     reason: str
+    handled: bool = False
+    handled_at: datetime | None = None

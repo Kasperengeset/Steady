@@ -113,7 +113,12 @@ def _avatar_ref(s: Session, pid: int) -> dict | None:
         if Avatar is not None:
             break
     if Avatar is None:
-        return {"patient_id": pid}  # the frontend draws the default character
+        from ..appie import level_of, tier_of
+        from ..models_appie import AppiePet
+
+        pet = s.get(AppiePet, pid)
+        return {"patient_id": pid, "name": pet.name if pet else "Appie",
+                "tier": tier_of(level_of(rewards.xp(s, pid)))}
     av = s.exec(select(Avatar).where(Avatar.patient_id == pid)).first()
     if av is None:
         return {"patient_id": pid}
@@ -136,7 +141,9 @@ def _member_card(s: Session, m: Membership, viewer: Membership, now: datetime) -
         if prof.share_avatar:
             card["avatar"] = _avatar_ref(s, m.patient_id)
         if prof.share_level:
-            card["level"] = rewards.level_hint(rewards.xp(s, m.patient_id))["level"]
+            from ..appie import level_of
+
+            card["level"] = level_of(rewards.xp(s, m.patient_id))
         if prof.share_streak:
             card["streak"] = pres["streak"]
         if prof.share_checked_in:

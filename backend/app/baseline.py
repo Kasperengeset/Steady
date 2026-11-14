@@ -72,6 +72,8 @@ def _period_values(s: Session, b: Baseline) -> dict[str, dict[str, list[tuple[fl
     out: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
     hour_mode = settings.time_of_day == "hour"
     for slot, hour, name, v in rows:
+        if name == "active_minutes":
+            continue  # engagement-only; does not train or lock a scoring baseline
         if not hour_mode:  # B30: with the hour as a covariate there are no slot baselines
             out[slot.value if hasattr(slot, "value") else slot][name].append((v, hour))
         out["all"][name].append((v, hour))
@@ -141,7 +143,7 @@ def try_lock(s: Session, b: Baseline, now: datetime | None = None) -> bool:
             prior = state.prior_sd(state.load_branch(branch), f) if branch else None
             c, sc = state.robust_stats(vals, prior, k)
             rows.append(BaselineStat(baseline_id=b.id, slot=slot, feature=f, center=c, scale=sc, n=len(vals)))
-    if not rows:
+    if not any(row.feature in FEATURE_BRANCH for row in rows):
         # E.g. 3 spoken + 3 written check-ins: no single feature has enough values. Locking would give
         # an active baseline that can never score (and it is never re-anchored automatically) → extend.
         return False

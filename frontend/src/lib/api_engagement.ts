@@ -76,7 +76,7 @@ export interface MyCircle {
   token: string
   nudge: { pending: boolean; visible_from: string; can_cancel: boolean; message: string } | null
 }
-export interface AvatarRef { patient_id: number; name?: string | null; colour?: string | null; items_json?: string | null }
+export interface AvatarRef { patient_id: number; name?: string | null; colour?: string | null; items_json?: string | null; tier?: number }
 export interface MemberCard {
   member_id: number
   role: 'patient' | 'friend'
