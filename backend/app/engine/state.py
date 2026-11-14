@@ -160,14 +160,54 @@ def branch_deviation(z: dict[str, float], model: BranchModel) -> float:
     return sum(feature_shares(z, model).values())
 
 
-def combine_checkins(values: list[float]) -> float:
-    """Combine several check-ins of one day for one branch: sum(D) / sqrt(n) (Stouffer).
+def combine_checkins(values: list[float], weights: list[float] | None = None) -> float:
+    """Combine several check-ins of one day for one branch: Σ w·D / √(Σ w²) (weighted Stouffer).
 
     Each check-in's D has SD 1 under "no change", so the combination keeps SD 1 (thresholds keep their
-    meaning) while a real shift grows by sqrt(n) – two check-ins a day (morning + evening) make a
-    relapse easier to see without more false alarms. Assumes independent noise between check-ins.
+    meaning) while a real shift grows with more check-ins. All weights 1 gives sum(D) / sqrt(n) (B16).
+    B31: extra unprompted check-ins get weight EXTRA_WEIGHT, because same-day noise is partly shared
+    (a cold, poor sleep), which plain Stouffer ignores and which raised false alarms in the simulator.
     """
-    return sum(values) / len(values) ** 0.5
+    if weights is None or all(w == 1.0 for w in weights):
+        return sum(values) / len(values) ** 0.5
+    return sum(w * v for w, v in zip(weights, values)) / sum(w * w for w in weights) ** 0.5
+
+
+EXTRA_WEIGHT = 0.5  # B31: weight of an extra (unprompted, not the day's first) check-in in its branch
+
+
+def checkin_weight(prompted: bool, earlier_today_in_branch: int) -> float:
+    """B31: the check-in that answers today's prompt, or the day's first one in a branch, counts fully."""
+    return 1.0 if prompted or earlier_today_in_branch == 0 else EXTRA_WEIGHT
+
+
+HOUR_VAR = 12.0  # variance of the hour for prompts uniform over 09–21 (one pseudo-value's leverage)
+
+
+def hour_slope(values: list[float], hours: list[float | None], k: float) -> tuple[float, float, int] | None:
+    """B30: a feature's change per hour of the day on the healthy baseline, ridge-shrunk toward 0.
+
+        slope = Σ (h − h̄)(x − x̄) / (Σ (h − h̄)² + k · 12)
+
+    k pseudo-values with no slope (12 = Var of an hour uniform on 09–21) keep a short baseline from
+    fitting noise; with all check-ins at the same hour the slope is 0. Returns (slope, h̄, n) or None
+    when fewer than two values have an hour.
+    """
+    pairs = [(x, h) for x, h in zip(values, hours) if h is not None]
+    if len(pairs) < 2:
+        return None
+    h0 = statistics.fmean(h for _, h in pairs)
+    x0 = statistics.fmean(x for x, _ in pairs)
+    sxy = sum((h - h0) * (x - x0) for x, h in pairs)
+    sxx = sum((h - h0) ** 2 for _, h in pairs)
+    return sxy / (sxx + k * HOUR_VAR), h0, len(pairs)
+
+
+def adjust_for_hour(values: dict[str, float], hour: float | None, slopes: dict[str, tuple[float, float]]) -> dict[str, float]:
+    """Remove the baseline's time-of-day slope: x − slope·(hour − h̄). No hour → unchanged."""
+    if hour is None or not slopes:
+        return values
+    return {f: v - slopes[f][0] * (hour - slopes[f][1]) if f in slopes else v for f, v in values.items()}
 
 
 def daily_deviation(branch_D: dict[str, float]) -> float | None:

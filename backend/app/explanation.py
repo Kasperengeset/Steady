@@ -11,8 +11,12 @@ from .models import StateScore
 
 def _day_features(row: StateScore, track: str) -> dict[str, float]:
     ev = json.loads(row.evidence_json or "{}").get(track, {})
-    lists = json.loads(row.branch_scores_json or "{}").get(track, {})
-    n = {b: len(v) if isinstance(v, list) else 1 for b, v in lists.items()}
+    raw = json.loads(row.branch_scores_json or "{}")
+    lists, weights = raw.get(track, {}), raw.get("w", {}).get(track, {})
+    # The day's D per branch is Σ w·D / √(Σ w²) (B31); evidence holds Σ w·share, so divide by √(Σ w²).
+    # Rows without weights are B16 (all 1): Σ w² = n.
+    n = {b: sum(w * w for w in weights[b]) if b in weights else (len(v) if isinstance(v, list) else 1)
+         for b, v in lists.items()}
     return explain.day_feature_contributions(ev, n)
 
 
