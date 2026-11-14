@@ -26,17 +26,20 @@ def _now() -> datetime:
     return baseline.clock()
 
 
-def _rolling_history(s: Session, patient_id: int, before: datetime, slot: Slot) -> dict[str, list[float]]:
-    """Feature values from the same slot over the last `baseline_days` days (morning vs morning, T10)."""
+def _rolling_history(
+    s: Session, patient_id: int, before: datetime, slot: Slot, slopes: dict[str, tuple[float, float]] | None = None,
+) -> dict[str, list[float]]:
+    """Feature values over the last `baseline_days` days. B30 (time_of_day = "hour"): all check-ins,
+    each adjusted for its hour with the active baseline's slopes. Old "slots" mode: same slot only (T10)."""
     since = before - timedelta(days=settings.baseline_days)
-    rows = s.exec(
-        select(Feature.name, Feature.value)
-        .join(CheckIn, col(Feature.checkin_id) == CheckIn.id)
-        .where(CheckIn.patient_id == patient_id, CheckIn.slot == slot, CheckIn.ts >= since, CheckIn.ts < before)
-    ).all()
+    q = (select(Feature.name, Feature.value, CheckIn.local_hour)
+         .join(CheckIn, col(Feature.checkin_id) == CheckIn.id)
+         .where(CheckIn.patient_id == patient_id, CheckIn.ts >= since, CheckIn.ts < before))
+    if settings.time_of_day != "hour":
+        q = q.where(CheckIn.slot == slot)
     hist: dict[str, list[float]] = defaultdict(list)
-    for name, v in rows:
-        hist[name].append(v)
+    for name, v, hour in s.exec(q).all():
+        hist[name].append(state.adjust_for_hour({name: v}, hour, slopes or {})[name])
     return hist
 
 
@@ -49,13 +52,22 @@ def _day_lists(raw: str | None) -> dict[str, dict[str, list[float]]]:
     return out
 
 
+def _day_weights(raw: str | None, day: dict[str, dict[str, list[float]]]) -> dict[str, dict[str, list[float]]]:
+    """Per-check-in weights stored next to the day lists under "w" (B31); older rows: all 1 (B16)."""
+    stored = (json.loads(raw) if raw else {}).get("w", {})
+    return {t: {b: list(stored.get(t, {}).get(b, [1.0] * len(v))) for b, v in day[t].items()} for t in day}
+
+
 def _score_tracks(
     s: Session, patient_id: int, now: datetime, slot: Slot, today_by_branch: dict[str, dict[str, float]],
-    active,
+    active, hour: float | None = None,
 ) -> dict:
-    """Both tracks: vs the fixed healthy baseline (slow drift) and vs the last 14 days (abrupt change)."""
+    """Both tracks: vs the fixed healthy baseline (slow drift) and vs the last 14 days (abrupt change).
+    Today's values are adjusted for the hour of the check-in first (B30)."""
     anchor_stats = baseline.stats_for(s, active, slot.value)
-    hist = _rolling_history(s, patient_id, now, slot)
+    slopes = baseline.hour_slopes(s, active)
+    hist = _rolling_history(s, patient_id, now, slot, slopes)
+    today_by_branch = {b: state.adjust_for_hour(v, hour, slopes) for b, v in today_by_branch.items()}
     k = settings.sd_prior_strength
     D = {"anchored": {}, "rolling": {}}
     Z = {"anchored": {}, "rolling": {}}
@@ -173,7 +185,7 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
     driver: str | None = None
     branch_D: dict[str, float] = {}
     if active is not None:
-        tr = _score_tracks(s, patient_id, now, slot, today_by_branch, active)
+        tr = _score_tracks(s, patient_id, now, slot, today_by_branch, active, checkin.local_hour)
         prev = s.exec(
             select(StateScore).where(StateScore.patient_id == patient_id, StateScore.date < now.date())
             .order_by(col(StateScore.date).desc())
@@ -184,15 +196,25 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
         # All check-ins of the day count (STATUS.md B16): keep each check-in's D per track and branch,
         # combine per branch with sum/sqrt(n), then average over branches. A later check-in no longer
         # overwrites an earlier one (e.g. a negative diary followed by a neutral spoken check-in).
-        day = _day_lists(score.branch_scores_json if score else None)
+        # B31: the check-in that answers today's prompt, or the day's first one in a branch, counts fully;
+        # extras count at half weight (same-day noise is partly shared). Shares are weighted the same way,
+        # so the explanation still sums exactly to S (B20).
+        raw = score.branch_scores_json if score else None
+        day = _day_lists(raw)
+        wts = _day_weights(raw, day)
         evidence = json.loads(score.evidence_json) if score and score.evidence_json else {}
-        for t in day:
-            for branch, d in tr["D"][t].items():
-                day[t].setdefault(branch, []).append(d)
+        prompted = checkin.prompt_at is not None
+        for branch in {b for t in day for b in tr["D"][t]}:
+            w = state.checkin_weight(prompted, max(len(day[t].get(branch, [])) for t in day))
+            for t in day:
+                if branch not in tr["D"][t]:
+                    continue
+                day[t].setdefault(branch, []).append(tr["D"][t][branch])
+                wts[t].setdefault(branch, []).append(w)
                 sums = evidence.setdefault(t, {}).setdefault(branch, {})
                 for f, v in tr["shares"][t][branch].items():
-                    sums[f] = round(sums.get(f, 0.0) + v, 5)
-        day_branch = {t: {b: round(state.combine_checkins(v), 4) for b, v in day[t].items()} for t in day}
+                    sums[f] = round(sums.get(f, 0.0) + w * v, 5)
+        day_branch = {t: {b: round(state.combine_checkins(v, wts[t][b]), 4) for b, v in day[t].items()} for t in day}
         D_track = {t: state.daily_deviation(day_branch[t]) for t in S_track}
         prev_S = {"anchored": prev.S_anchored if prev else None, "rolling": prev.S_rolling if prev else None}
         for t, d in D_track.items():
@@ -210,7 +232,7 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
             score.D_rolling, score.S_rolling = D_track["rolling"], S_track["rolling"]
             if tr["Z"][driver]:
                 score.top_features_json = json.dumps(state.top_contributors(tr["Z"][driver]))
-            score.branch_scores_json = json.dumps(day)
+            score.branch_scores_json = json.dumps({**day, "w": wts})
             score.evidence_json = json.dumps(evidence)
             recent_anch = [x.S_anchored for x in s.exec(
                 select(StateScore).where(StateScore.patient_id == patient_id, StateScore.date < now.date())

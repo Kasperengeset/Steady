@@ -19,6 +19,7 @@ from .engine import state
 from .models import Baseline, BaselineStat, BaselineStatus, CheckIn, Feature
 
 SLOTS = ("morning", "evening")
+HOUR_SLOT = "hour"  # BaselineStat rows holding the time-of-day slope (B30), not a baseline slot
 FEATURE_BRANCH = {f: b for b, dirs in state.DIRECTION.items() for f in dirs}
 
 
@@ -61,17 +62,19 @@ def start(
     return b
 
 
-def _period_values(s: Session, b: Baseline) -> dict[str, dict[str, list[float]]]:
-    """slot -> feature -> values, from check-ins since the baseline started."""
+def _period_values(s: Session, b: Baseline) -> dict[str, dict[str, list[tuple[float, float | None]]]]:
+    """slot -> feature -> [(value, local hour)], from check-ins since the baseline started."""
     rows = s.exec(
-        select(CheckIn.slot, Feature.name, Feature.value)
+        select(CheckIn.slot, CheckIn.local_hour, Feature.name, Feature.value)
         .join(Feature, col(Feature.checkin_id) == CheckIn.id)
         .where(CheckIn.patient_id == b.patient_id, CheckIn.ts >= b.started_at)
     ).all()
-    out: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
-    for slot, name, v in rows:
-        out[slot.value if hasattr(slot, "value") else slot][name].append(v)
-        out["all"][name].append(v)
+    out: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    hour_mode = settings.time_of_day == "hour"
+    for slot, hour, name, v in rows:
+        if not hour_mode:  # B30: with the hour as a covariate there are no slot baselines
+            out[slot.value if hasattr(slot, "value") else slot][name].append((v, hour))
+        out["all"][name].append((v, hour))
     return out
 
 
@@ -122,10 +125,19 @@ def try_lock(s: Session, b: Baseline, now: datetime | None = None) -> bool:
     min_n = min(b.min_checkins, settings.min_feature_n)
     rows = []
     for slot, feats in _period_values(s, b).items():
-        for f, vals in feats.items():
-            if len(vals) < (min_n if slot == "all" else b.min_checkins):
+        for f, pairs in feats.items():
+            if len(pairs) < (min_n if slot == "all" else b.min_checkins):
                 continue
+            vals = [v for v, _ in pairs]
             branch = FEATURE_BRANCH.get(f)
+            if settings.time_of_day == "hour" and branch:
+                # B30: fit the feature's time-of-day slope, then centre and scale the hour-adjusted values.
+                # Stored as slot "hour": center = slope per hour, scale = reference hour, n = values with an hour.
+                fit = state.hour_slope(vals, [h for _, h in pairs], k)
+                if fit is not None:
+                    slope, h0, n_h = fit
+                    rows.append(BaselineStat(baseline_id=b.id, slot=HOUR_SLOT, feature=f, center=slope, scale=h0, n=n_h))
+                    vals = [v - slope * (h - h0) if h is not None else v for v, h in pairs]
             prior = state.prior_sd(state.load_branch(branch), f) if branch else None
             c, sc = state.robust_stats(vals, prior, k)
             rows.append(BaselineStat(baseline_id=b.id, slot=slot, feature=f, center=c, scale=sc, n=len(vals)))
@@ -146,11 +158,22 @@ def try_lock(s: Session, b: Baseline, now: datetime | None = None) -> bool:
 
 
 def stats_for(s: Session, b: Baseline, slot: str) -> dict[str, tuple[float, float, int]]:
-    """feature -> (centre, scale, n) for this slot, falling back to pooled 'all' per feature."""
+    """feature -> (centre, scale, n) for this slot, falling back to pooled 'all' per feature.
+    With the hour as a covariate (B30) only the pooled stats are used."""
     rows = s.exec(select(BaselineStat).where(BaselineStat.baseline_id == b.id)).all()
     pooled = {r.feature: (r.center, r.scale, r.n) for r in rows if r.slot == "all"}
+    if settings.time_of_day == "hour":
+        return pooled
     specific = {r.feature: (r.center, r.scale, r.n) for r in rows if r.slot == slot}
     return {**pooled, **specific}
+
+
+def hour_slopes(s: Session, b: Baseline) -> dict[str, tuple[float, float]]:
+    """B30: feature -> (slope per hour, reference hour) fitted on this baseline; empty for old baselines."""
+    if settings.time_of_day != "hour":
+        return {}
+    rows = s.exec(select(BaselineStat).where(BaselineStat.baseline_id == b.id, BaselineStat.slot == HOUR_SLOT)).all()
+    return {r.feature: (r.center, r.scale) for r in rows}
 
 
 def reject(s: Session, b: Baseline, note: str | None = None, now: datetime | None = None) -> Baseline:

@@ -123,8 +123,9 @@ def test_locks_after_period_then_scores_and_catches_change(client):
 
     detail = client.get("/api/patients/1/baseline").json()
     assert detail["active"]["version"] == 1
-    assert {"all", "morning"} <= set(detail["stats"])  # evening has too few → pooled fallback
-    assert "evening" not in detail["stats"]
+    # B30: one pooled baseline plus the time-of-day slope; no morning/evening slots
+    assert {"all", "hour"} <= set(detail["stats"])
+    assert "morning" not in detail["stats"] and "evening" not in detail["stats"]
 
 
 def test_new_baseline_keeps_old_one_active_until_it_locks(client):
@@ -176,6 +177,7 @@ def test_same_day_checkins_are_combined_not_overwritten(client):
 
 
 def test_same_branch_twice_a_day_is_combined_stouffer(client):
+    """B16, with B31: the second, unprompted check-in of the day counts at half weight."""
     rng = random.Random(5)
     client.post("/api/patients/1/baseline/start", json={"period_days": 0, "min_checkins": 6})
     for _ in range(6):
@@ -183,10 +185,51 @@ def test_same_branch_twice_a_day_is_combined_stouffer(client):
     a = checkin(client, features(0.8, rng))["state"]["branches"]["acoustic"]  # new day, morning
     first = state.combine_checkins([a])
     out = checkin(client, features(0.8, rng), slot="evening", same_day=True)
-    day = json.loads(client.get("/api/patients/1").json()["scores"][-1]["branch_scores_json"])
+    row = client.get("/api/patients/1").json()["scores"][-1]
+    day = json.loads(row["branch_scores_json"])
     d1, d2 = day["anchored"]["acoustic"]
     assert first == pytest.approx(d1, abs=1e-4)
-    assert out["state"]["branches"]["acoustic"] == pytest.approx((d1 + d2) / 2**0.5, abs=1e-3)
+    assert day["w"]["anchored"]["acoustic"] == [1.0, 0.5]
+    assert row["D_anchored"] == pytest.approx((d1 + 0.5 * d2) / 1.25**0.5, abs=1e-3)
+    # B20 still exact with weights: the explanation sums to S
+    why = out["state"]["explanation"]
+    assert sum(x["contribution"] for x in why["by_day"]) + why["older"] == pytest.approx(why["S"], abs=1e-3)
+    day_parts = client.get("/api/patients/1").json()["explanation"]["by_feature"]
+    assert sum(day_parts.values()) + why["older"] == pytest.approx(why["S"], abs=2e-3)
+
+
+def test_old_slot_baseline_still_scores(client, monkeypatch):
+    """Baselines locked before B30 have morning/evening rows and no slope: they fall back to 'all'."""
+    from app.config import settings
+
+    rng = random.Random(9)
+    monkeypatch.setattr(settings, "time_of_day", "slots")
+    client.post("/api/patients/1/baseline/start", json={"period_days": 0, "min_checkins": 6})
+    for _ in range(6):
+        checkin(client, features(0, rng))
+    assert "morning" in client.get("/api/patients/1/baseline").json()["stats"]
+    monkeypatch.setattr(settings, "time_of_day", "hour")
+    out = checkin(client, features(0, rng), slot="evening")
+    assert out["state"]["S_anchored"] is not None and abs(out["state"]["S_anchored"]) < 3
+
+
+def test_hour_slope_is_shrunk_and_removed():
+    vals = [10 + 0.5 * (h - 15) for h in range(9, 22)]  # rises 0.5 per hour
+    slope, h0, n = state.hour_slope(vals, list(range(9, 22)), k=5)
+    assert h0 == 15 and n == 13 and 0 < slope < 0.5  # shrunk toward 0 by k pseudo-values
+    assert state.hour_slope([1.0, 2.0, 3.0], [12.0, 12.0, 12.0], k=5)[0] == 0  # one hour only → no slope
+    assert state.hour_slope([1.0, 2.0], [None, 9.0], k=5) is None
+    adj = state.adjust_for_hour({"energy": 1.0, "jitter": 2.0}, 18.0, {"energy": (0.1, 15.0)})
+    assert adj == {"energy": pytest.approx(0.7), "jitter": 2.0}
+    assert state.adjust_for_hour({"energy": 1.0}, None, {"energy": (0.1, 15.0)}) == {"energy": 1.0}
+
+
+def test_checkin_weights_b31():
+    assert state.checkin_weight(prompted=False, earlier_today_in_branch=0) == 1.0
+    assert state.checkin_weight(prompted=False, earlier_today_in_branch=2) == 0.5
+    assert state.checkin_weight(prompted=True, earlier_today_in_branch=1) == 1.0
+    assert state.combine_checkins([1.0, 1.0]) == pytest.approx(2**0.5)  # B16 unchanged with weights 1
+    assert state.combine_checkins([1.0, 1.0], [1.0, 0.5]) == pytest.approx(1.5 / 1.25**0.5)
 
 
 def test_feature_with_too_few_baseline_values_gets_no_stats(client):

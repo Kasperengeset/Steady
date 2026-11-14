@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     healthy_period_days: int = 14
     healthy_min_checkins: int = 10  # per slot; slots with fewer fall back to all slots pooled
     min_feature_n: int = 5  # a feature needs this many baseline values (capped at the baseline's min_checkins)
+    # Time of day (STATUS.md B30): "hour" = one pooled baseline + each feature's slope on CheckIn.local_hour;
+    # "slots" = the old morning/evening baselines (T10). Random prompt times (#22) make slots too thin.
+    time_of_day: str = "hour"
     # Shrink personal SD toward the corpus within-person SD: sigma^2 = (n s^2 + k s0^2) / (n + k)
     sd_prior_strength: float = 5.0
     # Elevated flag (clinician only): S_anchored < -elevated_S for elevated_days scored days in a row
