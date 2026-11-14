@@ -515,6 +515,8 @@ A good healthy baseline is **necessary but not sufficient**.
 - [~] **T12** Thresholds measured in the simulator (B19): clinician 0.4–1.4 false alerts/yr (OK), friends 2.3–4.8/yr (above the ≤ 2 target). Decide whether to tighten the friend rule (e.g. S > 1 for 4 days) – team decision
 - [ ] **T19 (Mahdan)** Text branch context: Gemini content scores (mood, energy_self, anhedonia, social_contact, the writer's own current state, with evidence quotes, English + Norwegian, `store=False`) next to `text_logit`. Validate on a team-written context set (~40 entries: recovery stories, other people's feelings, negations, sarcasm, masked low mood, style-matched pairs, Norwegian) plus a consistency check (5 repeated calls). Weight > 0 only if it fixes the context cases without hurting the plain ones
 - [ ] **T18** Reduce the per-patient baseline bias (the main limit found in B19): longer baseline or 2 check-ins/day during it, and include the centre's uncertainty in the scale (≈ σ·√(1 + 1.57/n))
+- [x] **T20 (#21, backend)** Fixed phrase + 30 s memo: optional `phrase` file on `POST /api/checkins` (old clients keep working), `phrase_*` features, WER gate, tests in `backend/tests/test_phrase.py` (B22). Frontend two-step flow waits for #19 on main
+- [x] **T21 (#22, backend)** Daily prompt: `DailyPrompt` + `PromptSettings` (`models_prompt.py`), `GET /api/patients/{id}/prompt`, `POST …/prompt/now` (demo), `PUT …/prompt/settings` (quiet hours, pause today, off), nullable `CheckIn.prompt_at`, `local_hour`, `speech_s` (old `app.db` files get them via `db.add_missing_columns()`), tests in `backend/tests/test_prompt.py` (B23). Banner + demo button wait for #19; Web Push (P2) not started
 
 ---
 
