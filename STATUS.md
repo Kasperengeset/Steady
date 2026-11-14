@@ -99,6 +99,14 @@ Den glidende baselinen på 14 dager tilpasser seg et tilbakefall som kommer sakt
 - Korpusmodellen (`ml/score_clip.py`), som er for svak til å stå alene (AUC 0,77, mikrofonavhengig)
 - Et spørreskjema innimellom (for eksempel PHQ-9 annenhver uke) som klinisk anker
 
+### Hvor mange klipp trengs?
+Modellen er **allerede trent** (114 personer). Brukerens egne klipp brukes til å teste og til baseline, ikke til trening.
+- **Test av modellen:** 2–5 klipp i ulike tilstander (engasjert vs. trøtt og flat), med samme mikrofon og avstand, 30–60 s fritt snakk. Sjekk at trekkene beveger seg i riktig retning (`ml/score_clip.py`).
+- **Personlig baseline:** koden krever minst 3, men det er statistisk tynt (et SD-estimat fra 3 målinger er svært usikkert). **~7 er brukbart, ~14 (to uker) er stabilt.** Det passer med perioden for «frisk baseline» etter TMS.
+- **Morgen og kveld** bør ha hver sin baseline, fordi stemmen er systematisk forskjellig gjennom døgnet (T10).
+- **Bedre modell = flere *personer*, ikke flere klipp.** Mange klipp fra én person uten merkelapp hjelper ikke klassifikatoren. Personlige vekter ville krevd måneder med data sammen med depresjonsscore.
+- **Demo:** to uker finnes ikke. Bruk noen opptak, populasjonsnormer (T5) og simulatoren.
+
 ### Tale vs. tekst
 Tale går til akustikk-grenen, skrevet dagbok til tekst-grenen. Gemini brukes i tekst- og innholdsdelen.
 
@@ -131,6 +139,7 @@ Tale går til akustikk-grenen, skrevet dagbok til tekst-grenen. Gemini brukes i 
 - [ ] **T7** Kjør leseoppgaven som ekstra kontroll (`--task reading --no-write`)
 - [ ] **T8** Belønningen til banditen: «ble tilstanden bedre?» (`S_{t+1} < S_t`) er ikke koblet inn (`routers/interventions.py`)
 - [ ] **T9** Test med Kaspers egne opptak (`ml/score_clip.py`)
+- [ ] **T10** Baseline: høyere minimum (~5–7 innsjekker før z-score) og egen baseline for morgen og kveld (`state.zscores`, `_baseline_history`)
 - [ ] Simulator for demo-slider (`sim/simulator.py` er en plassholder)
 
 ---
