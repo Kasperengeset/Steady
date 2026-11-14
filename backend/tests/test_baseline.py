@@ -173,7 +173,12 @@ def test_same_day_checkins_are_combined_not_overwritten(client):
     later = checkin(client, features(0, rng), same_day=True)  # neutral spoken check-in, same day
     assert later["state"]["branches"]["text"] == pytest.approx(D_text)  # the diary still counts
     assert "acoustic" in later["state"]["branches"]
-    assert later["state"]["S"] > 1  # not replaced by the neutral voice-only value
+    # Not replaced by the neutral voice-only value: today's D is the mean of both branches (B16). One diary
+    # moves S by at most α·z_cap (B34), so the check is on D, not on S crossing 1.
+    row = client.get("/api/patients/1").json()["scores"][-1]
+    branches = later["state"]["branches"]
+    assert row["D"] == pytest.approx(sum(branches.values()) / len(branches), abs=1e-3)
+    assert row["D"] > 1 and later["state"]["S"] > 0.3
 
 
 def test_same_branch_twice_a_day_is_combined_stouffer(client):
@@ -289,3 +294,33 @@ def test_escalation_uses_the_shared_clock(client):
         esc = s.exec(select(Escalation)).all()
     assert esc and all(e.ts.date() == baseline_mod.clock().date() or e.ts.date() < baseline_mod.clock().date() for e in esc)
     assert max(e.ts for e in esc).date() > datetime.now(timezone.utc).date()  # clock was advanced beyond today
+
+
+def _diary(logit: float) -> PipelineResult:
+    res = PipelineResult(transcript="(mock diary)")
+    vals = {"text_logit": logit, "absolutist": 0.0, "first_person": 12.0, "sentiment": 0.6}
+    res.features = [(f, v, FeatureSource.text) for f, v in vals.items()]
+    return res
+
+
+def test_steady_text_patient_with_a_tight_baseline_gets_no_false_alarm(client):
+    """B34: five near-identical good diaries used to give a tiny MAD scale, so the next ordinary good day
+    (text_logit +1.5, well inside the team's good-day spread) scored S ≫ 2. The prior SD and the z cap stop it."""
+    model = state.load_branch("text")
+    assert model.meta["feature_stats"]["text_logit"]["within_sd"] > 1.0 and model.meta["z_cap"] == 3.0
+    client.post("/api/patients/1/baseline/start", json={"period_days": 0, "min_checkins": 5})
+    for logit in (-0.50, -0.48, -0.52, -0.49, -0.51):
+        out = checkin(client, _diary(logit), kind="text")
+    assert out["baseline"]["status"] == "active"
+    for _ in range(3):
+        out = checkin(client, _diary(1.0), kind="text")
+    assert out["state"]["S"] < 2 and out["state"]["level"] < 2  # was S ≈ 1.5 / 0.015 · … ≫ 2 before B34
+    for _ in range(4):  # a clearly low diary is still caught (low-day bank mean +1.6 to +3.2)
+        out = checkin(client, _diary(4.0), kind="text")
+    assert out["state"]["S"] > 1
+
+
+def test_z_cap():
+    z = state.zscores({"a": 10.0, "b": -10.0, "c": 1.0}, {"a": (0, 1, 5), "b": (0, 1, 5), "c": (0, 1, 5)}, {}, cap=3.0)
+    assert z == {"a": 3.0, "b": -3.0, "c": 1.0}
+    assert state.zscores({"a": 10.0}, {"a": (0, 1, 5)}, {})["a"] == 10.0  # no cap for voice (acoustic.json)

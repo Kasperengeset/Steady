@@ -184,9 +184,11 @@ def test_written_diary_builds_baseline_then_flags_a_low_day(client):
     assert out["baseline"]["status"] == "active"
     assert {f["source"] for f in out["features"]} == {"text"}
 
-    out = post_text(client, ENTRIES["low_1"]).json()
-    assert out["state"]["branches"].get("text") is not None
-    assert out["state"]["S_anchored"] > 1  # clearly worse than this person's good days
+    first = post_text(client, ENTRIES["low_1"]).json()
+    assert first["state"]["branches"]["text"] > 1  # one low diary is clearly worse than this person's good days
+    for k in (2, 3, 4):  # … and a run of low days lifts S over 1 (one diary alone moves S at most α·3, B34)
+        out = post_text(client, ENTRIES[f"low_{k}"]).json()
+    assert out["state"]["S_anchored"] > 1
 
 
 def test_written_diary_crisis_goes_to_clinician(client):

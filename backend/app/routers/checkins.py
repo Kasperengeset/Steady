@@ -79,7 +79,7 @@ def _score_tracks(
             "rolling": state.history_stats(hist, model, k, settings.rolling_min_n),
         }
         for track, stats in tracks.items():
-            z = state.zscores(vals, stats, model.direction)
+            z = state.zscores(vals, stats, model.direction, model.meta.get("z_cap"))
             if z:
                 Z[track][branch] = z
                 shares[track][branch] = state.feature_shares(z, model)

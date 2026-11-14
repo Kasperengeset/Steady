@@ -168,6 +168,24 @@ TF-IDF + logistic regression is a bag of words and word pairs. It sees "alone" o
 - **Label = forum, not diagnosis.** It learns "writes like r/depression". Meditation posts are flagged 27 % of the time, divorce 17 %: introspective writing.
 - **Action (T19, Mahdan):** add context-aware Gemini content scores next to `text_logit`, validated on a team-written context set before they get any weight. The brief was handed over on 14 Nov.
 
+### Text-branch false alarms for steady patients (B34)
+Found by `seed_demo` (#40): a steady patient writing only good diaries got S 1.9–4.2 from the text branch alone. Cause: good-day diaries vary a lot in `text_logit`, and text had **no prior SD** to shrink toward (B15), so a 5–14-diary baseline could get a tiny MAD scale. `backend/app/sim/text_baseline.py` → [`ml/reports/engine/text_baseline.md`](ml/reports/engine/text_baseline.md): team-written diaries only (`ml/text/diary_bank.csv`, 3 authors' good/low banks; no Gemini, no Reddit). One diary a day, text branch alone; each patient writes in one author's style; the prior for author X comes from the **other two** authors (leave-one-author-out). 102 steady patient-years and 102 relapses per row:
+
+| Baseline diaries | Scale | False clinician alerts/yr (current rule) | Max S, steady | Missed relapses, calibrated ≤ 1 FA/yr |
+|---|---|---|---|---|
+| 5 | no prior (before) | **16.2** | 56 | 59 |
+| 5 | prior SD s0, k = 5 | 5.8 | 6.3 | 63 |
+| 5 | **prior + z capped at ±3** | **3.0** | 3.1 | **39** |
+| 14 | no prior (before) | **12.9** | 53 | 66 |
+| 14 | prior SD s0, k = 5 | 4.0 | 7.5 | 72 |
+| 14 | **prior + z capped at ±3** | **1.7** | 3.0 | **38** |
+
+(minimum-scale and centre-uncertainty variants in the report: no better than the prior alone.)
+- **The prior alone fixes the scale but not detection**: at the same calibrated false-alarm rate it misses as many relapses. Single unusual diaries still drive S (max 6–7).
+- **The z cap is what helps**: one diary can move a text feature by at most 3 SD, so the threshold that gives ≤ 1 false alert/yr drops from S > 3.4 to S > 2.2, and missed relapses fall from 59–72 to 37–41 of 102.
+- **Still not good enough alone:** with the current thresholds the text branch gives 1.7–3.0 false clinician alerts per patient-year, and a single low diary no longer lifts S over 1 (a run of low days does). The text branch should not escalate on its own; together with voice it is one of two branches in D_t.
+- s0 (all 3 authors, in `text.json["feature_stats"]`): `text_logit` 1.31, `absolutist` 1.22, `first_person` 7.49, `sentiment` 0.29. Baselines locked before B34 keep their old scale (never re-anchored); the z cap applies at once.
+
 ### Gemini content scores (#28) – built, weight 0 (B33)
 `llm.rate_text` (`gemini-4-hydrogen`, temperature 0, strict JSON schema, `store=False`) rates only the writer's own state now: `mood`, `energy_self`, `anhedonia`, `social_contact` (0–10) with an evidence quote each. Invalid JSON, out-of-range values, an error or `about_self_now = false` → no scores (never a neutral 5). It runs for diaries and real transcripts (`pipeline._add_text`), never on the fixed phrase; evidence goes to `llm_json["content"]` for the clinician. Text and replies are never logged; tests never call Gemini (empty key in `conftest.py`).
 
@@ -503,6 +521,7 @@ A good healthy baseline is **necessary but not sufficient**.
 | B31 | Extra unprompted check-ins count at **half weight** (`Σ w·D / √Σ w²`, prompted w = 1, extras w = 0.5) | Counting fully (B16) is right only if same-day noise is independent; with 30–60 % shared day noise it gave 1.5–2.9 false clinician alerts/yr. Half weight keeps most of the detection gain (31 vs 32 missed at shared 0.3) with fewer false alarms. Context-only throws the gain away |
 | B32 | **Engagement stays out of S** (weight 0); it is used only by the avatar check-ins (#25) | At the same calibrated false-alarm rate it missed more relapses in every scenario (72–92 vs 47–82 of 100). Its apparent gain under the uncalibrated rule came from 3–5 false alerts/yr |
 | B33 | **Gemini content scores at weight 0** although the #28 gate passed on the team set | Combined scorer 100 % on context entries vs TF-IDF 50 %, pairs 100 %, repeat SD 0.21 (`ml/reports/text/context_check.md`). But the set and the instruction were written by the same author and the instruction names the test categories, so the pass is not independent evidence. Weights per #28 (text_logit 0.5, each Gemini score 0.125, with a correlation block) only after a held-out set passes (T28). Existing baselines need 5 rated entries anyway (B17). Off by default until then (`rate_text_enabled`): no diary text goes to Google for a score with no effect |
+| B34 | **Text branch: prior within-person SD + z cap at ±3** (`text.json` `feature_stats` + `z_cap`; voice unchanged) | Steady text-only patients got 13–16 false clinician alerts/yr (max S 53–56) because a 5–14-diary baseline had no SD to shrink toward. Prior s0 = pooled within-author SD of team-written good days; leave-one-author-out simulation: prior + cap → 1.7–3.0 false alerts/yr and 37–41 vs 59–66 missed of 102 at the calibrated ≤ 1 FA/yr. The prior alone fixed the scale but not detection; the cap did (`ml/reports/engine/text_baseline.md`) |
 
 ---
 
