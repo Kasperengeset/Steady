@@ -1,7 +1,7 @@
 # STATUS – Beyond the Clinic
 
 > Living document: what is built, what we have learned about the model, which decisions we made and why, and what is left.
-> **Update this whenever something changes.** Original plan: [`docs/plan.md`](docs/plan.md). Plain-language guides with the maths kept simple: [`docs/model.pdf`](docs/model.pdf) (whole model, acoustic branch) and [`docs/text_model.pdf`](docs/text_model.pdf) (text branch, Reddit data, pre vs during COVID-19). Last update: Sat 14 Nov 2026 (branch `acoustic-model`).
+> **Update this whenever something changes.** Original plan: [`docs/plan.md`](docs/plan.md). Plain-language guides with the maths kept simple: [`docs/model.pdf`](docs/model.pdf) (whole model, acoustic branch) and [`docs/text_model.pdf`](docs/text_model.pdf) (text branch, Reddit data, pre vs during COVID-19). Last update: Sat 14 Nov 2026 (branch `science-engine`).
 
 ## Core message
 
@@ -280,6 +280,33 @@ Code: `engine/explain.py`, `app/explanation.py`. API: `state.explanation` on eve
 | 2 | 38/60 | ~1 |
 | 1 | 17/60 | 1.85 |
 
+### Engine design checks for random prompts (#27)
+`backend/app/sim/evaluate_design.py` → [`ml/reports/engine/design_checks.md`](ml/reports/engine/design_checks.md). Same seeded patients in every row, 100 healthy patient-years + 100 relapses; "calibrated" = S threshold set to ≤ 1 false clinician onset per healthy patient-year (as B19). New simulator options are off by default (old output reproduced exactly).
+
+**Time of day** (one prompt a day, uniform 09–21, a personal morning→evening shift of `effect` within-person SDs). Missed of 100, calibrated:
+
+| Noise | Effect | One slot | Two slots at 14:00 (slot needs 10, app now) | Two slots (slot needs 5) | One slot + hour as covariate |
+|---|---|---|---|---|---|
+| ×1.0 | 0 | 28 | 30 | 26 | 25 |
+| ×1.0 | 0.5 SD | 25 | 27 | 27 | 23 |
+| ×1.0 | 1.0 SD | 31 | 32 | 28 | **17** |
+| ×1.5 | 0–1.0 SD | 51–53 | 50–58 | 48–52 | 50–52 |
+
+- Two slots do not help and cost false alarms under the current rule (1.4–2.3 false clinician alerts/yr vs ~1.0 with one slot): with ~6 morning and ~8 evening values per baseline, slots are noisy, and the rolling track (≥ 7 per slot) is often missing.
+- The hour as a covariate (per-feature slope on the healthy baseline, ridge-shrunk with k = 5) is never worse and clearly better when the day curve is strong (B30).
+
+**Extra unprompted check-ins** (noise ×1.5). "Shared" = the part of the noise variance common to all check-ins of one day; B16 assumes 0.
+
+| Shared | 1 prompted only | + 1.5 extras/day, count fully (B16) | half weight | context only |
+|---|---|---|---|---|
+| 0 | 53 missed · 1.1 FA/yr | 21 · 0.5 | 22 · 0.4 | 37 · 0.2 |
+| 0.3 | 61 · 0.8 | 32 · **1.5** | 31 · 1.2 | 42 · 0.3 |
+| 0.6 | 53 · 0.7 | 40 · **2.9** | 41 · 2.2 | 45 · 0.3 |
+
+(missed of 100 calibrated · false clinician alerts/yr with the current rule). Extras do add detection, but with shared day noise counting them fully pushes false alarms above target; half weight keeps most of the gain with fewer false alarms (B31). The same holds for B16's 2 scheduled check-ins/day: shared 0.6 gives 2.1 false alerts/yr.
+
+**Engagement signal** (adherence 0.85 − drop × latent d, optional busy spells): at the same calibrated false-alarm rate it is **worse in every setting** (72–92 missed vs 47–82 without). Under the uncalibrated rule it seems to catch more (3–26 missed) only because false alerts rise to 3–5/yr. Missed days are frequent and noisy compared with the slow acoustic drift (B32). Memo length was not simulated: Androids depressed speakers talked *longer* (18.6 s vs 10.5 s), so there is no supported direction.
+
 ### ⭐ Where the numbers come from – what is data, what is chosen
 Three kinds of numbers decide whether a change counts as "depression-like":
 
@@ -452,6 +479,9 @@ A good healthy baseline is **necessary but not sufficient**.
 | B21 | Elevated flag (S_anchored < −1 for 3 days) for the clinician only | "Better than normal" can be hypomania. It must not reach friends. Simulator: 38/60 elevated episodes caught at ~1 false flag/yr with 2 check-ins/day |
 | B28 | Phrase features take their corpus prior from the **reading task**, not the interview; only `energy`, `arousal`, `valence`, `f0_std`, `speech_rate` are phrase candidates | Androids reading (5 parts per speaker): within-person SD 1.5× smaller, ICC 0.72 vs 0.52, same net detectability (1.69 vs 1.58 held-out, a tie), AUC lower (0.68–0.71 vs 0.77). `pause_ratio` flips direction in read speech, `jitter`/`shimmer` keep no group difference (`ml/reports/voice/reading_vs_interview.md`) |
 | B29 | Gate for phrase weights, set **before** recording: 90 % CI of the SD ratio phrase/free below 1, below 1 for every person, ≥ 2 people × ≥ 4 sessions, a B28 candidate. Until then weight 0 | 2 people × 5 sessions can only show a large difference (ratio < ~0.54); a lenient gate would tune the engine to 2 voices (B13) |
+| B30 | **Random prompt times: one slot, with the hour as a covariate** (per-feature slope fitted on the healthy baseline, shrunk toward 0 with k = 5); no morning/evening split | Simulator (#27): two slots at 14:00 never helped and raised false clinician alerts to 1.4–2.3/yr; the covariate was never worse and with a strong day curve missed 17 vs 31 of 100 (`ml/reports/engine/design_checks.md`) |
+| B31 | Extra unprompted check-ins count at **half weight** (`Σ w·D / √Σ w²`, prompted w = 1, extras w = 0.5) | Counting fully (B16) is right only if same-day noise is independent; with 30–60 % shared day noise it gave 1.5–2.9 false clinician alerts/yr. Half weight keeps most of the detection gain (31 vs 32 missed at shared 0.3) with fewer false alarms. Context-only throws the gain away |
+| B32 | **Engagement stays out of S** (weight 0); it is used only by the avatar check-ins (#25) | At the same calibrated false-alarm rate it missed more relapses in every scenario (72–92 vs 47–82 of 100). Its apparent gain under the uncalibrated rule came from 3–5 false alerts/yr |
 
 ---
 
@@ -469,6 +499,8 @@ A good healthy baseline is **necessary but not sufficient**.
 - [ ] **T6** Consider down-weighting `energy` because of mic dependence
 - [x] **T7** Reading task vs interview (`ml/voice/reading_vs_interview.py`, §2): reading is steadier (1.5× smaller within-person SD) but separates worse (AUC 0.68–0.71 vs 0.77); it is the prior for phrase features (B28)
 - [ ] **T25 (Kasper, Mahdan)** Record the phrase check: 5 sessions each (phrase + 30 s free talk, different times of day), then `ml/voice/phrase_check.py recorded_voice/phrase_check` → gate B29
+- [ ] **T26** Implement B30 (hour covariate from `CheckIn.local_hour`) and B31 (extras at half weight) in `baseline.py`/`engine/state.py` after PR #29 is merged
+- [ ] **T27** Measure the shared same-day noise (2 check-ins on one day vs across days) once real data exists: it decides whether B16/B31 hold
 - [ ] **T8** Bandit reward: "did the state improve?" (`S_{t+1} < S_t`) is not wired in (`routers/interventions.py`)
 - [x] **T9** Test with our own recordings: 8 clips from Kasper and Mahdan (see «Smoke test»)
 - [x] **T10** ≥ 7 check-ins for the rolling track; morning and evening separately in both tracks
