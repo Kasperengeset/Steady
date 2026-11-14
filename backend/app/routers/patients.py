@@ -3,8 +3,9 @@ import json
 from fastapi import APIRouter, Depends, HTTPException
 from sqlmodel import Session, col, select
 
+from .. import baseline
 from ..db import get_session
-from ..models import CheckIn, Patient, StateScore
+from ..models import BaselineStatus, CheckIn, Patient, StateScore
 from ..schemas import PatientDetail, PatientSummary
 
 router = APIRouter(tags=["patients"])
@@ -19,9 +20,12 @@ def list_patients(s: Session = Depends(get_session)) -> list[PatientSummary]:
     out = []
     for p in s.exec(select(Patient)).all():
         scores = _scores(s, p.id)
+        b = baseline.latest(s, p.id, BaselineStatus.active) or baseline.latest(s, p.id, BaselineStatus.building)
         out.append(PatientSummary(
             id=p.id, name=p.name, level=p.risk_level,
             S=scores[-1].S if scores else None, trend=[x.S for x in scores[-14:]],
+            driver=scores[-1].driver if scores else None,
+            baseline_status=b.status.value if b else None,
         ))
     return sorted(out, key=lambda x: (-x.level, -(x.S or 0)))
 

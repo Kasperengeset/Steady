@@ -13,8 +13,16 @@ node_modules/
 frontend/dist/
 frontend/dev-dist/
 
-# Secrets
+# Secrets – the pre-commit hook in scripts/git-hooks/ also blocks these and key patterns
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*credentials*.json
+*client_secret*.json
+*service-account*.json
+token*.json
 
 # Data – Androids Corpus must NEVER be committed (non-commercial, no redistribution)
 data/
@@ -23,7 +31,8 @@ data/
 *.webm
 *.ogg
 *.mp3
+*.m4a
+*.flac
 *.zip
 
-# Generated model weights (regenerate with ml/train_weights.py)
-backend/app/engine/weights.json
+# backend/app/engine/weights/*.json IS committed: derived coefficients, not corpus data

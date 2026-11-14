@@ -25,6 +25,7 @@ class FeatureSource(str, Enum):
     prosody = "prosody"
     emotion = "emotion"
     llm = "llm"
+    text = "text"
     wearable = "wearable"
 
 
@@ -64,10 +65,52 @@ class StateScore(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
     patient_id: int = Field(foreign_key="patient.id", index=True)
     date: Date
-    D: float  # weighted daily deviation
-    S: float  # EWMA-smoothed state
+    D: float  # combined daily deviation = the track that drives S
+    S: float  # combined EWMA state = max(S_anchored, S_rolling) – used for escalation
     level: int = 0
+    # Two tracks (STATUS.md T1): vs the fixed healthy baseline (slow drift) and vs the last 14 days (abrupt change)
+    D_anchored: float | None = None
+    S_anchored: float | None = None
+    D_rolling: float | None = None
+    S_rolling: float | None = None
+    driver: str | None = None  # "anchored" | "rolling" – which track set S
+    baseline_version: int | None = None
     top_features_json: str = "[]"
+    branch_scores_json: str = "{}"  # {"anchored": {"acoustic": D_b, ...}, "rolling": {...}}
+
+
+class BaselineStatus(str, Enum):
+    building = "building"  # collecting check-ins during the healthy period
+    active = "active"  # locked, used for scoring
+    retired = "retired"  # replaced by a newer locked baseline
+    rejected = "rejected"  # clinician said the period was not representative
+
+
+class Baseline(SQLModel, table=True):
+    """Fixed "healthy" reference, built from the first weeks after TMS. Never updated automatically."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    patient_id: int = Field(foreign_key="patient.id", index=True)
+    version: int
+    status: BaselineStatus = BaselineStatus.building
+    started_at: datetime = Field(default_factory=now)
+    locked_at: datetime | None = None
+    period_days: int
+    min_checkins: int
+    confirmed_by: str | None = None  # clinician who confirmed remission (optional)
+    note: str | None = None
+
+
+class BaselineStat(SQLModel, table=True):
+    """Robust centre/scale per feature and slot ("morning" | "evening" | "all")."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    baseline_id: int = Field(foreign_key="baseline.id", index=True)
+    slot: str
+    feature: str
+    center: float  # median
+    scale: float  # MAD-based SD shrunk toward the corpus within-person SD
+    n: int
 
 
 class Arm(SQLModel, table=True):

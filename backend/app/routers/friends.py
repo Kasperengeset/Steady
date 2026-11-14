@@ -15,5 +15,5 @@ def hint(patient_id: int, s: Session = Depends(get_session)) -> FriendHint:
     if p is None:
         raise HTTPException(404, "patient not found")
     if p.risk_level >= 1:
-        return FriendHint(show_hint=True, message=f"Kanskje en god dag å ta kontakt med {p.name}?")
+        return FriendHint(show_hint=True, message=f"Maybe a good day to reach out to {p.name}?")
     return FriendHint(show_hint=False, message="")

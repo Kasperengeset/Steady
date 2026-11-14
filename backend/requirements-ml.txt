@@ -1,12 +1,11 @@
-# Installed Saturday – heavy signal/ML deps
+# Acoustic branch – signal processing + training (install: pip install -r requirements-ml.txt)
 -r requirements.txt
-praat-parselmouth
 opensmile
-numpy
-scipy
-scikit-learn
-pandas
 torch
 transformers
 librosa
-google-genai
+soundfile
+numpy
+pandas
+scikit-learn
+matplotlib

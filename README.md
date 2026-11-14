@@ -19,7 +19,7 @@ PWA (React) ──audio──▶ FastAPI
           Thompson-sampling bandit ─▶ escalation ladder
 ```
 
-Raw audio is deleted right after feature extraction. Full plan: [`docs/plan.md`](docs/plan.md).
+Raw audio is deleted right after feature extraction. Full plan: [`docs/plan.md`](docs/plan.md). **Current status, model results and decisions: [`STATUS.md`](STATUS.md).**
 
 ## Run locally
 
@@ -34,17 +34,32 @@ cd frontend
 npm install && npm run dev                     # http://localhost:5173
 ```
 
-Copy `.env.example` to `.env` and add `GEMINI_API_KEY` when the real pipeline lands.
+## Secrets and the Gemini key
+
+Do these once per clone:
+
+```bash
+git config core.hooksPath scripts/git-hooks   # pre-commit hook: blocks .env, keys, data and audio
+cp .env.example .env                          # then paste GEMINI_API_KEY into .env (gitignored)
+backend/.venv/bin/python scripts/check_gemini.py   # tests the key without printing it
+```
+
+- The key lives only in `.env`. Never in code, the frontend (Vite `VITE_*` variables are shipped to the browser), a commit, an issue or a chat. All Gemini calls go through the backend.
+- Every Gemini call passes `store=False`: Gemini stores requests by default, and diaries are health data.
+- Never send Androids Corpus audio to Gemini or any other API (licence, STATUS.md B2). Test with our own recordings.
+- If a key ever reaches GitHub: revoke it in AI Studio at once, then clean the history. Deleting the file in a new commit is not enough.
 
 ## Repo layout
 
 | Path | What |
 |---|---|
-| `backend/app/pipeline/` | feature extractors (currently stubs) |
-| `backend/app/engine/` | state engine, bandit, escalation |
+| `backend/app/pipeline/` | feature extractors: prosody + emotion (acoustic), `text.py` (text branch), Gemini (stub) |
+| `backend/app/engine/` | state engine, bandit, escalation; branch weights in `weights/` |
 | `backend/app/routers/` | API – contract in `schemas.py`, mirrored in `frontend/src/lib/api.ts` |
 | `frontend/src/views/` | Patient / Clinician / Friends |
-| `ml/` | weight training on the Androids Corpus (data not in repo) |
+| `ml/` | acoustic branch training on the Androids Corpus (data not in repo) |
+| `ml/text/` | text branch training on the Reddit Mental Health Dataset – see [`ml/text/README.md`](ml/text/README.md) |
+| `ml/download_data.py` | downloads Reddit (text) and Depresjon (health) into `data/` |
 
 ## License
 

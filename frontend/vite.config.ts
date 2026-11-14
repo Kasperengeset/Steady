@@ -11,7 +11,7 @@ export default defineConfig({
       manifest: {
         name: 'Beyond the Clinic',
         short_name: 'Beyond',
-        description: 'Daglig stemmeinnsjekk for vedlikehold etter TMS-behandling',
+        description: 'Daily voice check-in for maintenance after TMS treatment',
         theme_color: '#2f6f62',
         background_color: '#f4efe6',
         display: 'standalone',
