@@ -7,29 +7,55 @@ from datetime import date, datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile
 from sqlmodel import Session, col, select
 
+from .. import baseline
 from ..config import settings
 from ..db import get_session
 from ..engine import bandit, escalation, state
 from ..models import (
-    Arm, CheckIn, Contact, ContactKind, Escalation, Feature, InterventionLog, Patient, Slot, StateScore,
+    Arm, BaselineStatus, CheckIn, ContactKind, Escalation, Feature, InterventionLog, Patient, Slot, StateScore,
 )
 from ..pipeline import extract_features
-from ..schemas import CheckInResponse, FeatureOut, InterventionOut, StateOut
+from ..schemas import BaselineOut, CheckInResponse, FeatureOut, InterventionOut, StateOut
 
 router = APIRouter(tags=["checkins"])
 
 
-def _baseline_history(s: Session, patient_id: int, before: datetime) -> dict[str, list[float]]:
+def _rolling_history(s: Session, patient_id: int, before: datetime, slot: Slot) -> dict[str, list[float]]:
+    """Feature values from the same slot over the last `baseline_days` days (morning vs morning, T10)."""
     since = before - timedelta(days=settings.baseline_days)
     rows = s.exec(
         select(Feature.name, Feature.value)
         .join(CheckIn, col(Feature.checkin_id) == CheckIn.id)
-        .where(CheckIn.patient_id == patient_id, CheckIn.ts >= since, CheckIn.ts < before)
+        .where(CheckIn.patient_id == patient_id, CheckIn.slot == slot, CheckIn.ts >= since, CheckIn.ts < before)
     ).all()
     hist: dict[str, list[float]] = defaultdict(list)
     for name, v in rows:
         hist[name].append(v)
     return hist
+
+
+def _score_tracks(
+    s: Session, patient_id: int, now: datetime, slot: Slot, today_by_branch: dict[str, dict[str, float]],
+    active,
+) -> dict:
+    """Both tracks: vs the fixed healthy baseline (slow drift) and vs the last 14 days (abrupt change)."""
+    anchor_stats = baseline.stats_for(s, active, slot.value)
+    hist = _rolling_history(s, patient_id, now, slot)
+    k = settings.sd_prior_strength
+    D = {"anchored": {}, "rolling": {}}
+    Z = {"anchored": {}, "rolling": {}}
+    for branch, vals in today_by_branch.items():
+        model = state.load_branch(branch)
+        tracks = {
+            "anchored": {f: anchor_stats[f] for f in model.direction if f in anchor_stats},
+            "rolling": state.history_stats(hist, model, k, settings.rolling_min_n),
+        }
+        for track, stats in tracks.items():
+            z = state.zscores(vals, stats, model.direction)
+            if z:
+                Z[track][branch] = z
+                D[track][branch] = round(state.branch_deviation(z, model), 4)
+    return {"D": D, "Z": Z}
 
 
 def _todays_intervention(s: Session, patient_id: int, today: date) -> InterventionOut:
@@ -78,34 +104,48 @@ async def create_checkin(
     for name, value, source in result.features:
         s.add(Feature(checkin_id=checkin.id, name=name, value=value, source=source))
 
-    # State engine – one deviation per branch, then averaged over branches with data
-    history = _baseline_history(s, patient_id, now)
+    # Healthy-baseline lifecycle (STATUS.md T1): no score until a baseline is locked
+    active = baseline.latest(s, patient_id, BaselineStatus.active)
+    building = baseline.latest(s, patient_id, BaselineStatus.building)
+    if active is None and building is None:
+        building = baseline.start(s, patient_id, now=now)
+    if building is not None and baseline.try_lock(s, building, now):
+        active, building = building, None
+
     today_by_branch: dict[str, dict[str, float]] = defaultdict(dict)
     for name, v, source in result.features:
         today_by_branch[state.BRANCH_OF_SOURCE[source]][name] = v
-    z_by_branch: dict[str, dict[str, float]] = {}
-    branch_D: dict[str, float] = {}
-    for branch, vals in today_by_branch.items():
-        model = state.load_branch(branch)
-        z = state.zscores(vals, history, model.direction)
-        if z:
-            z_by_branch[branch] = z
-            branch_D[branch] = round(state.branch_deviation(z, model), 4)
-    prev = s.exec(
-        select(StateScore).where(StateScore.patient_id == patient_id, StateScore.date < now.date())
-        .order_by(col(StateScore.date).desc())
-    ).first()
+
     S_val: float | None = None
-    D = state.daily_deviation(branch_D)
-    if D is not None:
-        S_val = state.ewma(D, prev.S if prev else None, settings.ewma_alpha)
-        score = s.exec(
-            select(StateScore).where(StateScore.patient_id == patient_id, StateScore.date == now.date())
-        ).first() or StateScore(patient_id=patient_id, date=now.date(), D=D, S=S_val)
-        score.D, score.S = D, S_val
-        score.top_features_json = json.dumps(state.top_contributors(z_by_branch))
-        score.branch_scores_json = json.dumps(branch_D)
-        s.add(score)
+    S_track: dict[str, float | None] = {"anchored": None, "rolling": None}
+    driver: str | None = None
+    branch_D: dict[str, float] = {}
+    if active is not None:
+        tr = _score_tracks(s, patient_id, now, slot, today_by_branch, active)
+        prev = s.exec(
+            select(StateScore).where(StateScore.patient_id == patient_id, StateScore.date < now.date())
+            .order_by(col(StateScore.date).desc())
+        ).first()
+        D_track = {t: state.daily_deviation(tr["D"][t]) for t in S_track}
+        prev_S = {"anchored": prev.S_anchored if prev else None, "rolling": prev.S_rolling if prev else None}
+        for t, d in D_track.items():
+            if d is not None:
+                S_track[t] = round(state.ewma(d, prev_S[t], settings.ewma_alpha), 5)
+        present = {t: v for t, v in S_track.items() if v is not None}
+        if present:
+            # Escalate on whichever track is worse; tell the clinician which one (drift vs abrupt change)
+            driver = max(present, key=present.get)
+            S_val = present[driver]
+            branch_D = tr["D"][driver]
+            score = s.exec(
+                select(StateScore).where(StateScore.patient_id == patient_id, StateScore.date == now.date())
+            ).first() or StateScore(patient_id=patient_id, date=now.date(), D=D_track[driver], S=S_val)
+            score.D, score.S, score.driver, score.baseline_version = D_track[driver], S_val, driver, active.version
+            score.D_anchored, score.S_anchored = D_track["anchored"], S_track["anchored"]
+            score.D_rolling, score.S_rolling = D_track["rolling"], S_track["rolling"]
+            score.top_features_json = json.dumps(state.top_contributors(tr["Z"][driver]))
+            score.branch_scores_json = json.dumps(tr["D"])
+            s.add(score)
 
     recent = [x.S for x in s.exec(
         select(StateScore).where(StateScore.patient_id == patient_id).order_by(col(StateScore.date))
@@ -115,7 +155,8 @@ async def create_checkin(
     level = escalation.evaluate_level(recent[-7:], result.crisis)
     if level > 0 and level != patient.risk_level:
         recipient = ContactKind.friend if level == 1 else ContactKind.clinician
-        s.add(Escalation(patient_id=patient_id, level=level, recipient=recipient, reason=f"S={S_val}"))
+        s.add(Escalation(patient_id=patient_id, level=level, recipient=recipient,
+                         reason="crisis flag" if result.crisis else f"S={S_val} ({driver})"))
     patient.risk_level = level
     s.add(patient)
 
@@ -125,7 +166,11 @@ async def create_checkin(
     return CheckInResponse(
         checkin_id=checkin.id,
         features=[FeatureOut(name=n, value=round(v, 3), source=src.value) for n, v, src in result.features],
-        state=StateOut(S=S_val, level=level, branches=branch_D),
+        state=StateOut(
+            S=S_val, level=level, branches=branch_D,
+            S_anchored=S_track["anchored"], S_rolling=S_track["rolling"], driver=driver,
+        ),
+        baseline=BaselineOut(**baseline.progress(s, active or building, now)),
         intervention=intervention,
         crisis=result.crisis,
     )

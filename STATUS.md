@@ -114,11 +114,13 @@ Kjører den **ekte motoren** (`state.py`, `bandit.py`, `escalation.py`, trent `a
 
 **Resultater over 50 syntetiske pasienter, med *målt* støy og samvariasjon fra Androids (oppdatert 14.11):**
 
-| Støy fra dag til dag | Bom, glidende baseline | **Bom, fast baseline (T1)** | Falske alarmer (fast baseline, snitt dager) |
-|---|---|---|---|
-| ×1,0 (målt innen én økt) | 41/50 | **13/50** | 0,36 |
-| ×1,5 | 43/50 | **25/50** | 0,38 |
-| ×2,0 | 45/50 | **32/50** | 0,42 |
+Simulatoren bruker nå **de samme funksjonene som appen** (median/MAD, krymping mot korpuset, minst 7 målinger for glidende spor). «Kombinert» = det appen eskalerer på.
+
+| Støy fra dag til dag | Bom, glidende | Bom, fast | **Bom, kombinert (appen)** | Falske alarmer, kombinert (snitt dager) |
+|---|---|---|---|---|
+| ×1,0 (målt innen én økt) | 41/50 | 15/50 | **14/50** | 0,38 |
+| ×1,5 | 41/50 | 26/50 | **25/50** | 0,68 |
+| ×2,0 | 40/50 | 30/50 | **28/50** | 0,74 |
 
 ⚠️ **Tidligere tall (0/50 bom) var for optimistiske.** De bygde på en gjettet støy (0,6 × variasjonen mellom personer) og antok uavhengige trekk.
 
@@ -132,10 +134,30 @@ Tolkning:
 - **Banditen lærer svakt på 70 dager** (19/50 fant beste tiltak med de gamle innstillingene). Belønningen er maks 0,5, fordi «ble tilstanden bedre?» ikke er koblet inn (T8).
 - **Antakelser** (følger med i API-svaret): målt støy innen én økt × `day_noise_factor`, målt samvariasjon, og selvrapport 4 dager forsinket.
 
-### Svakhet: langsomt tilbakefall glir inn i baselinen ⚠️ (bekreftet i simulatoren)
-Den glidende baselinen på 14 dager tilpasser seg et tilbakefall som kommer sakte over uker. **Med målt støy går 41/50 tilbakefall tapt med glidende baseline, mot 13/50 med fast.** Løsningen (T1, høyeste prioritet) er:
-- **fast «frisk baseline»** fra de første ~2 ukene etter behandling, som fanger langsom glidning
-- **glidende baseline** for de siste 14 dagene, som fanger brå endring
+### Svakhet: langsomt tilbakefall glir inn i baselinen ⚠️ → løst med fast «frisk baseline» (T1, bygget 14.11)
+Den glidende baselinen på 14 dager tilpasser seg et tilbakefall som kommer sakte over uker. Med målt støy går 41/50 tilbakefall tapt med den alene, mot 14/50 med fast og glidende kombinert.
+
+### ⭐ Frisk baseline – slik den er bygget (T1)
+**Livsløp:** `building` → (perioden er over og nok innsjekker) → `active` → (en ny låses) → `retired`. Behandleren kan underkjenne: `rejected`, og en ny startes.
+- **Start:** første innsjekk uten baseline starter én automatisk. Behandleren kan starte en ny med `POST /api/patients/{id}/baseline/start` (for eksempel etter ny telefon eller bekreftet remisjon).
+- **Periode:** 14 dager og minst 10 innsjekker (`config.py`: `healthy_period_days`, `healthy_min_checkins`). Kan overstyres per baseline; **demo: `{"period_days": 0, "min_checkins": 3}`**. Er perioden over med for få innsjekker, forlenges den.
+- **Ingen score i perioden.** Pasienten ser «Bygger din normal: dag x av 14». Krise-flagget virker hele tiden.
+- **Lagret per trekk og per tid på døgnet** (`morning` / `evening` / `all`):
+  - senter = median
+  - spredning = MAD-basert SD krympet mot korpusets SD innen person: `σ² = (n·s² + k·s₀²)/(n + k)`, med k = 5
+  - tider på døgnet med for få innsjekker faller tilbake på `all`
+- **To spor per innsjekk:**
+  - `S_anchored` mot frisk baseline fanger glidning
+  - `S_rolling` mot de siste 14 dagene, samme tid på døgnet og minst 7 innsjekker, fanger brå endring
+  - **S = den høyeste av de to**, og behandleren ser hvilken (`driver`)
+- **Fornyes aldri automatisk.** En ny baseline bygges mens den gamle fortsatt brukes, og den gamle pensjoneres først når den nye låses. Underkjent baseline → ingen score før en ny er låst.
+- **Kode:**
+  - `app/baseline.py` (livsløp)
+  - `engine/state.py` (`robust_stats`, `history_stats`, `zscores`)
+  - `routers/checkins.py` (to spor)
+  - `routers/baselines.py` (API: `GET …/baseline`, `POST …/baseline/start|confirm|reject`)
+  - tester i `backend/tests/test_baseline.py` (`backend/.venv/bin/python -m pytest backend/tests`)
+- ⚠️ **Etter endringer i datamodellen må `data/app.db` slettes** (`create_all` legger ikke til nye kolonner). Det er bare testdata.
 
 ### Hva gir absolutt nivå i stedet for bare endring?
 - Tekst-grenen og krise-flagget (for eksempel «jeg føler meg håpløs»)
@@ -214,13 +236,13 @@ En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
 8. **Simulatortallene bygger på antakelser.** Virkelig ytelse krever en pilot over tid.
 
 ### Forbedringsplan (prioritert)
-1. **T1** fast «frisk baseline». Simulatoren med målt støy: 41/50 → 13/50 bom.
+1. ~~**T1** fast «frisk baseline»~~ ✅ bygget (se «Frisk baseline – slik den er bygget»). Simulatoren: 41/50 → 14/50 bom.
 2. ~~**T13** vekter for endring~~ ✅ testet: alle vektinger er like gode på holdt-ute data, så appen bruker like vekter (B12). Simulatoren bruker målt støy.
 3. **T14** opptaksprotokoll og kvalitetssjekk:
    - samme spørsmål, minst 20 s, fast avstand
    - avvis opptak med lite tale, klipping eller lav signal/støy
    - lydstyrke relativt til bakgrunnsstøy
-4. **T10** mer robust baseline: median/MAD, morgen og kveld hver for seg, minst ~7 innsjekker.
+4. ~~**T10** mer robust baseline~~ ✅ median/MAD, morgen og kveld hver for seg, minst 7 for glidende spor.
 5. ~~**T15** samvariasjon mellom trekk~~ ✅ D normaliseres med den målte samvariasjonen innen person (B12). Støyen i D var undervurdert med 27 %.
 6. **T12** kalibrere grensene i simulatoren mot et akseptabelt antall falske alarmer per pasient-måned.
 7. **T3/T4** tekst- og helsegrenen: uavhengige kilder gir den største reelle gevinsten.
@@ -246,6 +268,8 @@ En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
 | B11 | Simulatoren bruker den ekte motoren og effektstørrelser fra korpuset | Demoen viser det systemet faktisk gjør; robusthet måles over 50 frø |
 | B12 | **Like vekter + normalisering med samvariasjon innen person** (`ml/change_weights.py`) | På holdt-ute folds ga like vekter 1,58, klassifikator 1,58, følsomhet per trekk 1,61 og Fisher 1,54 (forskyvning i D ved fullt tilbakefall). Variasjonen mellom foldene (0,8–3,1) er mye større, så dataene kan ikke skille vektingene, og vi velger den enkleste. Samvariasjonen *er* målbar og gjør at D har SD 1 (før: 1,27 → for mange falske alarmer) |
 | B13 | Vekter velges **ikke** etter egne testopptak | 2 personer er en test, ikke treningsdata. Å justere vektene til testklippene ser pent ut, men er overtilpasning |
+| B14 | Frisk baseline: låses automatisk etter 14 dager (behandler kan underkjenne), S = den høyeste av fast og glidende, fornyes aldri automatisk | Låsing uten behandler hindrer at appen står stille. «Høyeste av to» fanger både glidning og brå fall (simulatoren: 14/50 bom mot 15/50 for fast alene). Automatisk fornyelse ville gitt frosken i gryta |
+| B15 | Spredning i baselinen = MAD krympet mot korpusets SD innen person (k = 5) | 14–28 målinger gir usikker personlig SD, og én rar dag skal ikke ødelegge baselinen |
 
 ---
 
@@ -253,7 +277,7 @@ En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
 
 *T-nummer = oppgave her. B-nummer = beslutning i seksjon 4.*
 
-- [ ] **T1 (høyest prioritet)** Fast «frisk baseline» i tillegg til den glidende (`engine/state.py`, `routers/checkins.py`). Simulatoren med målt støy: 41/50 bom uten den, 13/50 med.
+- [x] **T1** Fast «frisk baseline» i appen, med API, pasient- og behandlervisning, tester og simulator (B14, B15)
 - [ ] **T2** Ved talt innsjekk skal plassholderen for Gemini **ikke** legge tilfeldige tekst-trekk inn i scoren, bare transkripsjon og krise-flagg (`pipeline/__init__.py`)
 - [ ] **T3** Tekst-grenen: trene på teamets tekstdatasett → `weights/text.json`
 - [ ] **T4** Helse-grenen: Fitbit/Google Health-adapter, vekter fra Depresjon-datasettet (aktivitet minutt for minutt, MADRS)
@@ -262,7 +286,7 @@ En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
 - [ ] **T7** Kjør leseoppgaven som ekstra kontroll (`--task reading --no-write`)
 - [ ] **T8** Belønningen til banditen: «ble tilstanden bedre?» (`S_{t+1} < S_t`) er ikke koblet inn (`routers/interventions.py`)
 - [x] **T9** Test med egne opptak: 8 klipp fra Kasper og Mahdan (se «Røyktest på egne opptak»)
-- [ ] **T10** Baseline: høyere minimum (~5–7 innsjekker før z-score) og egen baseline for morgen og kveld (`state.zscores`, `_baseline_history`)
+- [x] **T10** Minst 7 innsjekker for glidende spor; morgen og kveld hver for seg i begge spor
 - [x] Simulator med den ekte motoren (`sim/simulator.py`, `/api/sim/run`, `/api/sim/robustness`)
 - [ ] **T11** Demo-visning i frontend: slider over dagene, S (glidende vs. fast) mot selvrapport, og hva banditen har lært (typer finnes i `frontend/src/lib/api.ts`)
 - [x] **T13** Vekter for endring testet på holdt-ute data: ingen vekting slår like vekter, så vi bruker like vekter (B12). Simulatoren bruker målt støy og samvariasjon

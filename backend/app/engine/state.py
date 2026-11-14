@@ -67,15 +67,52 @@ def load_branch(name: str) -> BranchModel:
     return BranchModel(name, data["weights"], direction, trained=True, meta=meta)
 
 
-def zscores(today: dict[str, float], history: dict[str, list[float]], direction: dict[str, int]) -> dict[str, float]:
-    out: dict[str, float] = {}
-    for name, x in today.items():
-        hist = history.get(name, [])
-        if len(hist) < 3:
-            continue  # TODO: population norms during first week
-        mu, sd = statistics.fmean(hist), statistics.pstdev(hist) or 1.0
-        out[name] = direction.get(name, 1) * (x - mu) / sd
+MAD_TO_SD = 1.4826  # MAD × 1.4826 ≈ SD for normal data
+
+
+def robust_stats(values: list[float], prior_sd: float | None, k: float) -> tuple[float, float]:
+    """Centre = median, scale = MAD-based SD shrunk toward the corpus within-person SD.
+
+    With ~14–28 baseline check-ins a personal SD is noisy (and MAD can be 0), so
+        sigma^2 = (n · s_personal^2 + k · s_corpus^2) / (n + k)
+    lets the corpus dominate early and the person's own data take over as n grows.
+    Median/MAD keep one odd day (cold, bad recording) from distorting the baseline.
+    """
+    center = statistics.median(values)
+    mad = statistics.median(abs(v - center) for v in values) * MAD_TO_SD
+    n = len(values)
+    if prior_sd:
+        scale = ((n * mad**2 + k * prior_sd**2) / (n + k)) ** 0.5
+    else:
+        scale = mad or statistics.pstdev(values)
+    return center, scale if scale > 0 else 1.0
+
+
+def prior_sd(model: BranchModel, feature: str) -> float | None:
+    """Within-person SD measured on the training corpus (acoustic.json feature_stats), if any."""
+    return model.meta.get("feature_stats", {}).get(feature, {}).get("within_sd")
+
+
+def history_stats(
+    history: dict[str, list[float]], model: BranchModel, k: float, min_n: int
+) -> dict[str, tuple[float, float, int]]:
+    """feature -> (centre, scale, n) for this branch's features with at least min_n values."""
+    out = {}
+    for f in model.direction:
+        vals = history.get(f, [])
+        if len(vals) >= min_n:
+            c, sc = robust_stats(vals, prior_sd(model, f), k)
+            out[f] = (c, sc, len(vals))
     return out
+
+
+def zscores(today: dict[str, float], stats: dict[str, tuple[float, float, int]], direction: dict[str, int]) -> dict[str, float]:
+    """Direction-adjusted z-scores of today's values against a baseline (positive = worse)."""
+    return {
+        f: direction.get(f, 1) * (x - stats[f][0]) / stats[f][1]
+        for f, x in today.items()
+        if f in stats
+    }
 
 
 def _corr(model: BranchModel, a: str, b: str) -> float:

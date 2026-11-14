@@ -65,6 +65,17 @@ export default function PatientView() {
         </div>
       )}
 
+      {result?.baseline.status === 'building' && (
+        <div className="card">
+          <h2>Bygger din normal</h2>
+          <p>
+            Dag {Math.min(Math.floor(result.baseline.days_elapsed) + 1, result.baseline.period_days)} av {result.baseline.period_days} ·{' '}
+            {result.baseline.checkins.morning + result.baseline.checkins.evening} innsjekker
+          </p>
+          <p className="muted">De første ukene lærer appen hvordan du høres ut når du har det bra. Etterpå sammenligner vi med det.</p>
+        </div>
+      )}
+
       {result && (
         <div className="card">
           <h2>Dagens tiltak</h2>
@@ -87,7 +98,9 @@ export default function PatientView() {
       {result && (
         <details className="debug">
           <summary>Debug: trekk og tilstand</summary>
-          <p>S = {result.state.S?.toFixed(2) ?? '— (bygger baseline)'} · nivå {result.state.level}</p>
+          <p>S = {result.state.S?.toFixed(2) ?? '— (bygger baseline)'} · nivå {result.state.level}
+            {result.state.driver && ` · drevet av ${result.state.driver === 'anchored' ? 'frisk baseline' : 'siste 14 dager'}`}</p>
+          <p>Frisk baseline: {result.state.S_anchored?.toFixed(2) ?? '—'} · Siste 14 dager: {result.state.S_rolling?.toFixed(2) ?? '—'}</p>
           <p>Grener: {Object.entries(result.state.branches).map(([b, d]) => `${b} ${d.toFixed(2)}`).join(' · ') || '—'}</p>
           <ul>
             {result.features.map((f) => (
