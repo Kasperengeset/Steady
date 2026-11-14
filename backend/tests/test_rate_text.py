@@ -75,10 +75,11 @@ def test_weight_zero_content_scores_leave_D_text_unchanged():
     assert state.branch_deviation(with_llm, model) == pytest.approx(state.branch_deviation(z, model))
 
 
-def test_diary_gets_content_scores_and_evidence(fake):
+def test_diary_gets_content_scores_and_evidence(fake, monkeypatch):
     from app.models import FeatureSource
     from app.pipeline import extract_text_features
 
+    monkeypatch.setattr(llm.settings, "rate_text_enabled", True)
     fake(reply=json.dumps(GOOD))
     res = extract_text_features("I am not sad today. Had lunch with Anna and biked to work.")
     llm_feats = {n: v for n, v, src in res.features if src == FeatureSource.llm}
@@ -87,10 +88,20 @@ def test_diary_gets_content_scores_and_evidence(fake):
     assert {n for n, _, src in res.features if src == FeatureSource.text} >= {"text_logit", "sentiment"}
 
 
-def test_diary_without_rating_has_no_content_scores(fake):
+def test_diary_without_rating_has_no_content_scores(fake, monkeypatch):
     from app.models import FeatureSource
     from app.pipeline import extract_text_features
 
+    monkeypatch.setattr(llm.settings, "rate_text_enabled", True)
     fake(reply="not json")
     res = extract_text_features("A quiet day.")
     assert not [n for n, _, src in res.features if src == FeatureSource.llm] and res.llm_json is None
+
+
+def test_off_by_default_sends_nothing(fake):
+    from app.pipeline import extract_text_features
+
+    assert llm.settings.rate_text_enabled is False  # B33: no data to Google while the scores have weight 0
+    fi = fake(reply=json.dumps(GOOD))
+    extract_text_features("A quiet day.")
+    assert fi.calls == []

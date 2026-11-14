@@ -182,6 +182,8 @@ Context check (`ml/text/eval_context.py` → [`ml/reports/text/context_check.md`
 
 Repeat SD 0.21 points (gap 7.3), r(TF-IDF, Gemini) = +0.04, median latency 4.7 s per call; 3 of 200 replies rejected by the validator. **The gate passes, but it is not independent:** the same author wrote the set and the instruction, and the instruction names the categories. So the weights stay 0 until a held-out set written without seeing the instruction also passes (T28).
 
+**Off by default** (`rate_text_enabled = False`; `RATE_TEXT_ENABLED=true` in `.env` for evaluation): at weight 0 it changes no score, so sending every diary and transcript to Google would be data without purpose (data minimisation) and ~5 s per check-in. It is switched on together with the weights once T28 passes. `eval_context.py` calls `rate_text` directly and is unaffected.
+
 
 ---
 
@@ -497,7 +499,7 @@ A good healthy baseline is **necessary but not sufficient**.
 | B30 | **Random prompt times: one slot, with the hour as a covariate** (per-feature slope fitted on the healthy baseline, shrunk toward 0 with k = 5); no morning/evening split | Simulator (#27): two slots at 14:00 never helped and raised false clinician alerts to 1.4–2.3/yr; the covariate was never worse and with a strong day curve missed 17 vs 31 of 100 (`ml/reports/engine/design_checks.md`) |
 | B31 | Extra unprompted check-ins count at **half weight** (`Σ w·D / √Σ w²`, prompted w = 1, extras w = 0.5) | Counting fully (B16) is right only if same-day noise is independent; with 30–60 % shared day noise it gave 1.5–2.9 false clinician alerts/yr. Half weight keeps most of the detection gain (31 vs 32 missed at shared 0.3) with fewer false alarms. Context-only throws the gain away |
 | B32 | **Engagement stays out of S** (weight 0); it is used only by the avatar check-ins (#25) | At the same calibrated false-alarm rate it missed more relapses in every scenario (72–92 vs 47–82 of 100). Its apparent gain under the uncalibrated rule came from 3–5 false alerts/yr |
-| B33 | **Gemini content scores at weight 0** although the #28 gate passed on the team set | Combined scorer 100 % on context entries vs TF-IDF 50 %, pairs 100 %, repeat SD 0.21 (`ml/reports/text/context_check.md`). But the set and the instruction were written by the same author and the instruction names the test categories, so the pass is not independent evidence. Weights per #28 (text_logit 0.5, each Gemini score 0.125, with a correlation block) only after a held-out set passes (T28). Existing baselines need 5 rated entries anyway (B17) |
+| B33 | **Gemini content scores at weight 0** although the #28 gate passed on the team set | Combined scorer 100 % on context entries vs TF-IDF 50 %, pairs 100 %, repeat SD 0.21 (`ml/reports/text/context_check.md`). But the set and the instruction were written by the same author and the instruction names the test categories, so the pass is not independent evidence. Weights per #28 (text_logit 0.5, each Gemini score 0.125, with a correlation block) only after a held-out set passes (T28). Existing baselines need 5 rated entries anyway (B17). Off by default until then (`rate_text_enabled`): no diary text goes to Google for a score with no effect |
 
 ---
 
