@@ -51,6 +51,9 @@ class CheckIn(SQLModel, table=True):
     transcript: str | None = None
     llm_json: str | None = None
     risk_flag: bool = False
+    prompt_at: datetime | None = None  # UTC time of the daily prompt this check-in answered (#22), else None
+    local_hour: float | None = None  # actual time of the check-in as a local decimal hour, e.g. 14.5 (#22, #27)
+    speech_s: float | None = None  # seconds with voice energy in the memo (None for written diaries)
 
 
 class Feature(SQLModel, table=True):
