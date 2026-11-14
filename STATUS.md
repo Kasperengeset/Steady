@@ -1,7 +1,7 @@
 # STATUS – Beyond the Clinic
 
 > Living document: what is built, what we have learned about the model, which decisions we made and why, and what is left.
-> **Update this whenever something changes.** Original plan: [`docs/plan.md`](docs/plan.md). Last update: Sat 14 Nov 2026 (branch `acoustic-model`).
+> **Update this whenever something changes.** Original plan: [`docs/plan.md`](docs/plan.md). Plain-language guides with the maths kept simple: [`docs/model.pdf`](docs/model.pdf) (whole model, acoustic branch) and [`docs/text_model.pdf`](docs/text_model.pdf) (text branch, Reddit data, pre vs during COVID-19). Last update: Sat 14 Nov 2026 (branch `acoustic-model`).
 
 ## Core message
 
@@ -132,6 +132,23 @@ The crisis flag is a fixed phrase list (English and Norwegian). It never waits f
 - **English only.** The demo is in English.
 - **Weights differ from B12.** `weights/text.json` puts 0.95 on `text_logit` (|standardised beta|, the original acoustic convention), not equal weights. Reason: the lexicon features add nothing on Reddit, `first_person` overlaps with `text_logit`, and there is no within-person text data to measure correlation. They stay in the output to explain the score to the clinician.
 
+### Context test (Kasper's review, 14 Nov)
+TF-IDF + logistic regression is a bag of words and word pairs. It sees "alone" or "worthless" but not **who** feels it, **when**, or whether it is **negated**. Six team-written texts:
+
+| Text | P(depression-like) | Words that pulled it up |
+|---|---|---|
+| good day (gym, friends, dinner) | 0.39 | friends, today |
+| **recovery story** ("months ago I felt alone and worthless … now I feel like myself again") | **0.96** | myself, worthless, alone |
+| **someone else's feelings** ("my sister feels hopeless … I was there for her and feel good") | **0.89** | hopeless, alone, nothing |
+| **negated** ("I am not sad, not lonely, not hopeless … a calm day") | **0.94** | sad, hopeless, nothing |
+| flat / masked low ("everything is fine … I did not really feel anything") | 0.89 | went to, everything, feel |
+| clearly low | 1.00 | of bed, nothing |
+
+- **The recovery story scores higher than the flat low day.** In the app, a recovering patient describing a past low could trigger an alert.
+- **Style confound in the diary check.** Good entries average logit −1.58 as written. With "I" added they average −0.65. Low entries average +0.60. About 40 % of the good/low gap is pronoun style, and `first_person` alone separates the set perfectly (25/25 pairs).
+- **Label = forum, not diagnosis.** It learns "writes like r/depression". Meditation posts are flagged 27 % of the time, divorce 17 %: introspective writing.
+- **Action (T19, Mahdan):** add context-aware Gemini content scores next to `text_logit`, validated on a team-written context set before they get any weight. The brief was handed over on 14 Nov.
+
 ---
 
 ## 3. Key concepts (things we have discussed)
@@ -243,6 +260,53 @@ Code: `engine/explain.py`, `app/explanation.py`. API: `state.explanation` on eve
 |---|---|---|
 | 2 | 38/60 | ~1 |
 | 1 | 17/60 | 1.85 |
+
+### ⭐ Where the numbers come from – what is data, what is chosen
+Three kinds of numbers decide whether a change counts as "depression-like":
+
+| Number | Where it comes from | Learned from data? |
+|---|---|---|
+| **Direction** (+1/−1: which way is worse) | Mean of the 62 depressed vs the 52 healthy speakers in Androids. All 8 match the literature, which was the starting point (e.g. arousal 0.311 vs 0.411 → lower is worse; pause ratio 0.449 vs 0.415 → higher is worse) | **yes** |
+| **The person's normal wobble** (σ) | The person's own healthy baseline (median/MAD), shrunk toward the corpus within-person SD | **yes** |
+| **Weights** | Equal (0.125). Four weightings tied on held-out speakers (B12) | no (deliberately) |
+| **Thresholds** (S > 1 for 3 days, S > 2) | Chosen in the original plan, then **measured** in the simulator (B19): 0.4–1.4 false clinician alerts and 2.3–4.8 false friend nudges per healthy patient-year | no |
+| **"A relapse moves a person the same way"** | Assumption. The corpus has one session per person, so nobody is seen both well and depressed | no |
+| **Typical shift δ** | (depressed mean − healthy mean) / within-person SD, e.g. arousal ≈ −1.4. **Not used in the score.** It explains why arousal, energy and valence drive ~2/3 of it, and it drives the simulator | yes |
+
+Text branch: `text_logit` is "worse" when higher by construction (trained to score r/depression high). The lexicon directions come from the Reddit means (depression: more absolutist words, more "I", lower sentiment).
+
+**In one line:** *what* counts as a depressive change comes from data; *how much* is needed before an alert is a choice, and we measure what that choice costs in false alarms.
+
+### ⭐ Strengths and weaknesses – overall assessment (14 Nov)
+
+| | Voice (acoustic) | Text (diary / transcript) |
+|---|---|---|
+| Headline number | AUC 0.77 | AUC 0.97 |
+| What the number tests | clinically diagnosed vs healthy people | r/depression posts vs other forums |
+| Strength of the label | **strong** (clinical diagnosis) | **weak** (forum membership) |
+| Known confounds | microphone, loudness, distance to phone | writing style (pronouns), genre (introspective writing) |
+| Understands context? | n/a | **no** – word by word (context test) |
+| Languages | any (prosody), corpus Italian | English only (crisis phrases also Norwegian) |
+| Tested on TMS patients | no | no |
+
+**Strengths**
+- Method: no speaker or author in both training and test; the same code in training and app; masking of give-away words; the test set used once; honest reference and confound checks (gender + age, duration, loudness).
+- Design: compares each patient with their **own healthy normal**, which removes most between-person and genre effects, and a fixed baseline is never re-anchored automatically.
+- **Explainable end to end**: S splits exactly into days and features (B20); text shows the words that pulled the score.
+- **Honest negative results are documented**: the HMM was not better (B19); finer weights could not be justified (B12); earlier optimistic simulator numbers were corrected.
+- The two branches **fail in different ways** (the microphone does not change word choice, writing style does not change the voice), so together they are stronger than either alone.
+
+**Weaknesses (in order of impact)**
+1. **No longitudinal validation.** Relapse detection is shown only in simulation. A clinical pilot is needed.
+2. **Per-patient baseline bias.** A 14-check-in baseline leaves a permanent offset of up to ±0.6 in D. This is the main limit found (B19, T18).
+3. **Unknown real day-to-day noise.** With 1 check-in a day, 24–46 of 100 relapses are missed depending on noise; 6–32 with 2 a day.
+4. **Between-person data used for within-person change** (the direction assumption above).
+5. **Text: no context, style and genre confounds, weak label** (context test, §2b; T19).
+6. **Voice: microphone sensitivity of `energy`** (~¼ of the signal) (T14).
+7. **Friend nudges too frequent** (2.3–4.8 false per year vs a target of ≤ 2) (T12).
+8. **Language:** Italian voice corpus; English-only text model.
+
+**How to say it in the pitch:** "We measure deviation from the patient's own healthy normal, in directions validated on a clinical voice corpus and a large text corpus. Alert thresholds are checked against a false-alarm target in simulation. Whether it detects relapse must be validated in a clinical pilot." Do **not** present 0.97 as "detects depression in diaries"; say "on Reddit".
 
 ### What gives an absolute level rather than just change?
 - The text branch and the crisis flag (e.g. "I feel hopeless")
@@ -395,6 +459,7 @@ A good healthy baseline is **necessary but not sufficient**.
 - [x] Flow fixes after the main merge: day score no longer overwritten (B16), minimum values per feature (B17), lock only with stats (B18), correct re-baselining progress (`baseline_building`)
 - [ ] **T17** A branch with too few baseline values stays unscored until a new baseline. Consider letting a branch "join" an active baseline later once it has ≥ 5 values (only if the clinician confirms the patient is still well)
 - [~] **T12** Thresholds measured in the simulator (B19): clinician 0.4–1.4 false alerts/yr (OK), friends 2.3–4.8/yr (above the ≤ 2 target). Decide whether to tighten the friend rule (e.g. S > 1 for 4 days) – team decision
+- [ ] **T19 (Mahdan)** Text branch context: Gemini content scores (mood, energy_self, anhedonia, social_contact, the writer's own current state, with evidence quotes, English + Norwegian, `store=False`) next to `text_logit`. Validate on a team-written context set (~40 entries: recovery stories, other people's feelings, negations, sarcasm, masked low mood, style-matched pairs, Norwegian) plus a consistency check (5 repeated calls). Weight > 0 only if it fixes the context cases without hurting the plain ones
 - [ ] **T18** Reduce the per-patient baseline bias (the main limit found in B19): longer baseline or 2 check-ins/day during it, and include the centre's uncertainty in the scale (≈ σ·√(1 + 1.57/n))
 
 ---
