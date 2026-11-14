@@ -12,6 +12,7 @@ import Portal from './clinician/Portal'
 import Notifications from './clinician/Notifications'
 import Patients from './clinician/Patients'
 import PatientDetail from './clinician/PatientDetail'
+import ModelRegistry from './clinician/ModelEvidence'
 import FriendNudge from './friend/FriendNudge'
 import FriendCirclePage from './features/engagement/FriendCirclePage'
 
@@ -32,9 +33,11 @@ export default function App() {
           <Route path="circle" element={<Circle />} />
         </Route>
         <Route path="clinician" element={<Portal />}>
-          <Route index element={<Notifications />} />
+          <Route index element={<Patients />} />
           <Route path="patients" element={<Patients />} />
           <Route path="patients/:id" element={<PatientDetail />} />
+          <Route path="notifications" element={<Notifications />} />
+          <Route path="models" element={<ModelRegistry />} />
         </Route>
         <Route path="friend/:pid" element={<FriendNudge />} />
         <Route path="join" element={<FriendCircle />} />

@@ -175,6 +175,9 @@ def _word_evidence(transcript: str | None, features, provenance: str) -> dict:
 def capture_analysis(s: Session, checkin: CheckIn, features, reference: Baseline | None, tr: dict,
                      before: dict | None, after: dict | None, entry_weights: dict,
                      phrase=None, prompt=None, provenance: str = "snapshot") -> dict:
+    previous_day = s.exec(select(StateScore).where(
+        StateScore.patient_id == checkin.patient_id, StateScore.date < checkin.ts.date())
+        .order_by(col(StateScore.date).desc())).first() if provenance == "snapshot" else None
     tracks = {}
     for track in ("anchored", "rolling"):
         stats = {b: {name: {"center": v[0], "scale": v[1], "n": v[2]} for name, v in values.items()}
@@ -187,6 +190,10 @@ def capture_analysis(s: Session, checkin: CheckIn, features, reference: Baseline
         "baseline_origin": baseline_origin(s, reference), "baseline_status": reference.status.value if reference else "building",
         "tracks": tracks, "adjusted_values": tr.get("adjusted", {}), "hour_slopes": tr.get("hour_slopes", {}),
         "local_hour": checkin.local_hour, "time_of_day_mode": settings.time_of_day,
+        "engine": {"ewma_alpha": settings.ewma_alpha, "extra_checkin_weight": state.EXTRA_WEIGHT,
+                   "rolling_window_days": settings.baseline_days, "rolling_min_n": settings.rolling_min_n,
+                   "branch_aggregation": "available branch mean", "state_selection": "maximum reference track"},
+        "previous_day_state": score_point(previous_day),
         "entry_weights": entry_weights, "before": before, "after": after,
         "day_weights": (after or {}).get("day_weights", {}),
         "score_updated": provenance == "snapshot" and any(tr["D"][t] for t in ("anchored", "rolling")),

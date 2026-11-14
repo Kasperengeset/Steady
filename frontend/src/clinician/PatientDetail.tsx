@@ -1,153 +1,74 @@
-// Patient detail: drift over a period, day by day, their own words, what helps, baseline, and why it changes.
-import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { api } from '../lib/api'
-import { views, type Timeline } from '../lib/views'
-import { Card, Icon, LineChart, shortDate, toneStyle } from '../ui/kit'
-import { STATUS } from './Portal'
-import WhyPanel from './WhyPanel'
-import ExactExplanation from './ExactExplanation'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { clinical, BRANCHES, isNumber, number, patientStatus, shortDay, timestamp, useClinicalResource, type ClinicalDay, type EntryPage, type ClinicalWorkspace } from '../lib/clinical'
+import { Icon } from '../ui/kit'
+import { Badge, EmptyState, ErrorState, LiveStatus, LoadingState, OriginBadge, Panel, Score, SourceCoverage } from './ClinicalUI'
+import ClinicalChart from './ClinicalChart'
+import EntryInspector from './EntryInspector'
+import LiveAnalysis from './LiveAnalysis'
+import { ModelEvidence } from './ModelEvidence'
+import BaselinePanel from './BaselinePanel'
 
-const PERIODS = [7, 30, 90]
+type Tab = 'overview' | 'entries' | 'models' | 'baseline'
+const TABS: { key: Tab; label: string; icon: string }[] = [{ key: 'overview', label: 'Overview', icon: 'space_dashboard' }, { key: 'entries', label: 'Entry log', icon: 'view_list' }, { key: 'models', label: 'Models & analysis', icon: 'hub' }, { key: 'baseline', label: 'Personal baseline', icon: 'adjust' }]
+function calendarSeries(series: ClinicalDay[], days: number): ClinicalDay[] {
+  if (!series.length) return []
+  const ordered = [...series].sort((a, b) => a.date.localeCompare(b.date))
+  const end = ordered[ordered.length - 1].date
+  const lookup = new Map(series.map((day) => [day.date, day]))
+  return Array.from({ length: days }, (_, index) => { const date = new Date(`${end}T12:00:00Z`); date.setUTCDate(date.getUTCDate() - days + 1 + index); const key = date.toISOString().slice(0, 10); return lookup.get(key) || { date: key, S: null, S_anchored: null, S_rolling: null, branches: {} } })
+}
 
 export default function PatientDetail() {
-  const pid = Number(useParams().id)
-  const [days, setDays] = useState(30)
-  const [t, setT] = useState<Timeline | null>(null)
-  const [picked, setPicked] = useState<number | null>(null)
-  const [error, setError] = useState('')
-  const load = () => views.timeline(pid, days).then((value) => { setT(value); setError('') }).catch(() => setError('Could not refresh this patient. Return to this tab to retry.'))
-  useEffect(() => { setPicked(null); void load(); const focus = () => { void load() }; window.addEventListener('focus', focus); return () => window.removeEventListener('focus', focus) }, [pid, days]) // eslint-disable-line react-hooks/exhaustive-deps
+  const pid = Number(useParams().id), navigate = useNavigate(), [params, setParams] = useSearchParams()
+  const tab: Tab = TABS.some((item) => item.key === params.get('tab')) ? params.get('tab') as Tab : 'overview'
+  const selectedId = params.get('entry') && Number.isInteger(Number(params.get('entry'))) ? Number(params.get('entry')) : null
+  const [days, setDays] = useState(30), [offset, setOffset] = useState(0), [pickedDate, setPickedDate] = useState<string | null>(null)
+  const workspace = useClinicalResource(useCallback(() => clinical.workspace(pid, days), [pid, days]))
+  const entries = useClinicalResource(useCallback(() => clinical.entries(pid, 25, offset), [pid, offset]))
+  const [newCount, setNewCount] = useState(0), totalBefore = useRef<number | null>(null)
+  const series = useMemo(() => calendarSeries(workspace.data?.series || [], days), [workspace.data?.series, days])
+  const lastScored = series.map((day) => isNumber(day.S) || isNumber(day.S_anchored) || isNumber(day.S_rolling)).lastIndexOf(true)
+  const activeIndex = pickedDate ? series.findIndex((day) => day.date === pickedDate) : Math.max(0, lastScored >= 0 ? lastScored : series.length - 1)
+  const picked = series[activeIndex]
+  useEffect(() => { totalBefore.current = null; setNewCount(0); setOffset(0); setPickedDate(null) }, [pid])
+  useEffect(() => { if (!entries.data) return; const count = entries.data.total; if (totalBefore.current !== null && count > totalBefore.current) setNewCount((old) => old + count - totalBefore.current!); totalBefore.current = count }, [entries.data])
+  const switchTab = (key: Tab) => { const next = new URLSearchParams(params); next.set('tab', key); setParams(next, { replace: true }) }
+  const selectEntry = (id: number, key: Tab = 'entries') => { const next = new URLSearchParams(params); next.set('entry', String(id)); next.set('tab', key); setParams(next, { replace: true }) }
+  const refresh = () => { void workspace.refresh(); void entries.refresh() }
+  if (!workspace.data) return workspace.error ? <ErrorState message={workspace.error} retry={workspace.refresh} /> : <LoadingState label="Opening patient observations and model evidence" />
+  const w = workspace.data, patient = { ...w.patient, current: w.current, baseline: w.baseline.active || w.baseline.building }, current = w.current, status = patientStatus(patient)
+  const latestId = entries.data?.entries[0]?.id || null, inspection = selectedId || latestId
+  const saved = (id: number, patientId: number) => { setNewCount(0); if (patientId !== pid) { navigate(`/clinician/patients/${patientId}?tab=entries&entry=${id}`); return } setOffset(0); selectEntry(id); refresh() }
+  const selectedBranches = picked?.tracks?.[picked.driver || 'anchored'] || (picked?.branches && !Object.values(picked.branches).some((value) => typeof value === 'object') ? picked.branches as Record<string, number | null> : {})
+  return <div className="cl-page cl-patient-workspace">
+    <Link to="/clinician" className="cl-back-link"><Icon name="arrow_back" />Patient cohort</Link>
+    <div className="cl-patient-heading"><div className="cl-patient-identity"><span className="cl-patient-avatar is-large">{patient.name.slice(0, 1)}</span><div><p className="cl-eyebrow">PATIENT {String(patient.id).padStart(3, '0')}{patient.demo_key ? ' · ISOLATED DEMO RECORD' : ''}</p><h1>{patient.name}</h1><div className="cl-patient-subtitle"><Badge tone={status.tone}>{status.label}</Badge>{current?.elevated && <Badge tone="watch">Elevated · clinician context</Badge>}{patient.demo_key && <OriginBadge origin="demo-profile" />}<span>{w.baseline.active ? `Personal baseline v${w.baseline.active.version}` : 'Personal baseline building'}</span></div></div></div><div className="cl-workspace-actions"><LiveStatus updatedAt={workspace.updatedAt} refreshing={workspace.refreshing || entries.refreshing} refresh={refresh} /><button className="cl-button cl-button-primary" onClick={() => { const next = new URLSearchParams(params); next.set('tab', 'models'); next.set('analyze', '1'); setParams(next, { replace: true }) }}><Icon name="science" />Analyze a demo entry</button></div></div>
+    {patient.demo_key && <div className="cl-demo-disclosure"><Icon name="science" /><p><strong>Demonstration reference.</strong> Historical voice and wearable values may be simulated; diaries may be generated. Each entry identifies its origin. New submissions use the actual model pipeline.</p></div>}
+    {workspace.error && <ErrorState message={workspace.error} retry={workspace.refresh} />}
+    {newCount > 0 && <button className="cl-new-entry" onClick={() => { setNewCount(0); setOffset(0); switchTab('entries') }}><span className="cl-live-dot" />{newCount} new observation{newCount === 1 ? '' : 's'} · open the latest entries<Icon name="arrow_forward" /></button>}
+    <div className="cl-workspace-summary"><Score label="Current state · S" value={current?.S} hint={isNumber(current?.S) && current?.date ? `Last scored ${shortDay(current.date)}` : 'No scored observations'} /><Score label="Fixed baseline track" value={current?.S_anchored} hint="Captures gradual drift" /><Score label="Rolling baseline track" value={current?.S_rolling} hint="Captures recent change" /><div className="cl-summary-coverage"><span>Observation coverage</span><SourceCoverage sources={w.sources} mini /><small>{number(w.coverage?.live_entries, 0)} live · {number(w.coverage?.synthetic_entries, 0)} synthetic in this window</small></div></div>
+    <div className="cl-workspace-nav"><div className="cl-tabs" role="tablist" aria-label="Patient workspace views">{TABS.map((item) => <button key={item.key} role="tab" aria-selected={tab === item.key} onClick={() => switchTab(item.key)}><Icon name={item.icon} />{item.label}{item.key === 'entries' && entries.data && <b>{entries.data.total}</b>}</button>)}</div><label className="cl-period"><span>Observation window</span><select value={days} onChange={(event) => { setDays(Number(event.target.value)); setPickedDate(null) }}>{[7, 14, 30, 60, 90].map((period) => <option key={period} value={period}>{period} days</option>)}</select></label></div>
+    {tab === 'overview' && <><div className="cl-workspace-overview"><div className="cl-stack"><Panel title="Change from their own usual" eyebrow="PERSONAL STATE · TWO REFERENCE TRACKS" aside={<Badge tone="sage">{number(w.coverage?.scored_days, 0)} scored days</Badge>}><ClinicalChart dates={series.map((day) => day.date)} series={[{ key: 'anchored', label: 'Fixed healthy baseline', color: '#43654f', values: series.map((day) => day.S_anchored) }, { key: 'rolling', label: 'Rolling baseline', color: '#5d819c', values: series.map((day) => day.S_rolling), dashed: true }]} thresholds selected={activeIndex >= 0 ? activeIndex : null} onSelect={(index) => setPickedDate(series[index].date)} /><p className="cl-small-note">The smoothed state keeps recent history. The higher reference track drives escalation; a missing measurement is a gap.</p></Panel><Panel title="Which branch moved?" eyebrow={picked ? `${shortDay(picked.date).toUpperCase()} · DAILY BRANCH DEVIATION` : 'DAILY BRANCH DEVIATION'}><div className="cl-branch-readout">{BRANCHES.map((branch) => <div key={branch.key}><span className="cl-model-icon" style={{ color: branch.color }}><Icon name={branch.icon} /></span><span>{branch.label}<small>Daily baseline-relative D</small></span><strong>{number(selectedBranches[branch.key])}</strong></div>)}</div><ClinicalChart dates={series.map((day) => day.date)} series={BRANCHES.map((branch) => ({ ...branch, values: series.map((day) => day.tracks?.[day.driver || 'anchored']?.[branch.key] ?? (typeof day.branches?.[branch.key] === 'number' ? day.branches[branch.key] as number : null)) }))} label="Branch deviation · D" height={190} /></Panel></div><div className="cl-stack"><Panel title="What explains the current state?" eyebrow="EXACT ENGINE EVIDENCE"><EvidenceSummary workspace={w} /></Panel><Panel title="Observation coverage" eyebrow="LIVE & SYNTHETIC ARE SEPARATE"><SourceCoverage sources={w.sources} /><p className="cl-small-note">A configured model is not proof it ran on an entry. Open an observation to see its actual outputs.</p></Panel><Panel title="Actions & response" eyebrow="LEARNING FROM THIS PERSON"><ActionList workspace={w} /></Panel></div></div><Panel title="Recent entries" eyebrow="OPEN THE RAW MEASUREMENTS" aside={<button className="cl-text-link" onClick={() => switchTab('entries')}>View the full log <Icon name="arrow_forward" /></button>}><EntryLog page={entries.data} error={entries.error} selected={inspection} onSelect={selectEntry} compact /></Panel></>}
+    {tab === 'entries' && <div className="cl-entry-workspace"><Panel title="Every observation, in order" eyebrow="THE COMPLETE CARE RECORD" className="cl-entry-log-panel" aside={<Badge>{entries.data?.total ?? '—'} entries</Badge>}><EntryLog page={entries.data} error={entries.error} selected={inspection} onSelect={selectEntry} /><div className="cl-pagination"><span>{entries.data ? `${offset + (entries.data.entries.length ? 1 : 0)}–${offset + entries.data.entries.length} of ${entries.data.total}` : 'Loading entries'}</span><div><button disabled={offset === 0 || entries.refreshing} onClick={() => setOffset(Math.max(0, offset - 25))} className="cl-icon-button" aria-label="Previous entries page"><Icon name="chevron_left" /></button><button disabled={!entries.data || offset + 25 >= entries.data.total || entries.refreshing} onClick={() => setOffset(offset + 25)} className="cl-icon-button" aria-label="Next entries page"><Icon name="chevron_right" /></button></div></div>{entries.error && <button className="cl-button" onClick={entries.refresh}>Retry entry log</button>}</Panel><EntryInspector id={inspection} expectedPatientId={pid} /></div>}
+    {tab === 'models' && <div className="cl-stack"><LiveAnalysis patientId={pid} demoKey={patient.demo_key} onSaved={saved} /><ModelEvidence models={w.models} />{inspection && <div className="cl-entry-workspace"><Panel title="Inspect an actual observation" eyebrow="CATALOGUE ≠ INFERENCE"><p className="cl-muted">The cards above describe configured models. These entries show what was actually measured.</p><EntryLog page={entries.data} error={entries.error} selected={inspection} onSelect={(id) => selectEntry(id, 'models')} compact /></Panel><EntryInspector id={inspection} expectedPatientId={pid} /></div>}</div>}
+    {tab === 'baseline' && <BaselinePanel workspace={w} refresh={refresh} />}
+    <p className="cl-page-note">The data shown here come from the care record and loaded model artifacts. {w.coverage?.unknown_entries ? `${w.coverage.unknown_entries} older entries have unrecorded origins.` : ''}</p>
+  </div>
+}
 
-  if (!t) return <p className="text-ink-soft">{error || 'Loading…'}</p>
-  const st = STATUS[t.patient.level >= 3 ? 'care' : t.patient.status]
-  const day = picked !== null ? t.days[picked] : null
-  const dayWords = day ? t.feelings.filter((f) => f.ts.slice(0, 10) === day.date) : []
-  const b = t.baseline
-
-  return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6">
-      <Link to="/clinician" className="flex items-center gap-1 text-ink-soft"><Icon name="arrow_back" /> Notifications</Link>
-      {error && <p role="alert" className="text-sm text-ink-soft">{error}</p>}
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-semibold">{t.patient.name}</h1>
-          <p className="mt-2 flex items-center gap-3 text-ink-soft">
-            <span className={`rounded-full px-3 py-1 text-sm font-semibold ${st.chip}`}>{st.label}</span>
-            {t.patient.level >= 3 && <span className="rounded-full bg-terracotta-soft px-3 py-1 text-sm font-semibold text-terracotta">Crisis flag</span>}
-            {t.patient.days_since_start !== null && <span>Day {t.patient.days_since_start} since TMS</span>}
-          </p>
-        </div>
-        <div className="flex gap-2">
-          {PERIODS.map((p) => (
-            <button key={p} onClick={() => setDays(p)} className={`rounded-full px-4 py-2 ${days === p ? 'bg-primary text-on-primary' : 'bg-surface-mid text-ink-soft'}`}>{p} days</button>
-          ))}
-        </div>
-      </div>
-
-      <div className="grid gap-6 lg:grid-cols-[1fr_340px]">
-        <div className="flex min-w-0 flex-col gap-6">
-          <Card className="bg-white p-6 shadow-sm">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-lg font-semibold">Distance from their own baseline</h2>
-              <p className="flex gap-4 text-sm text-ink-soft">
-                <span className="flex items-center gap-1.5"><span className="h-0.5 w-5 bg-primary" /> slow drift (healthy baseline)</span>
-                <span className="flex items-center gap-1.5"><span className="h-0.5 w-5 border-t-2 border-dashed border-[#7d9db0]" /> sudden change (last 14 days)</span>
-              </p>
-            </div>
-            <div className="mt-4">
-              <LineChart height={220} smooth={false} band={[-1, 1]} yMin={-2} yMax={3}
-                         refs={[{ y: 1, label: 'friends nudged' }, { y: 2, label: 'clinic' }]}
-                         series={[{ values: t.days.map((d) => d.S_anchored), color: '#43654f' },
-                                  { values: t.days.map((d) => d.S_rolling), color: '#7d9db0', dashed: true, width: 2 }]}
-                         onPick={setPicked} picked={picked} />
-            </div>
-            <div className="mt-3 flex gap-[3px]">
-              {t.days.map((d, i) => {
-                const c = d.S === null ? 'bg-surface-high' : d.S >= 2 ? 'bg-terracotta' : d.S >= 1 ? 'bg-ochre' : 'bg-primary-container'
-                return (
-                  <button key={d.date} onClick={() => setPicked(i)} title={shortDate(d.date)}
-                          className={`relative flex h-9 flex-1 flex-col items-center justify-end rounded-md pb-0.5 ${c} ${picked === i ? 'ring-2 ring-ink' : ''}`}>
-                    {d.action_done && <Icon name="check" className="text-[11px] text-white" />}
-                    {d.checkin && <span className="absolute top-1 h-1 w-1 rounded-full bg-white" />}
-                  </button>
-                )
-              })}
-            </div>
-            <p className="mt-2 flex justify-between text-xs text-ink-soft">
-              <span>{shortDate(t.days[0].date)}</span><span>dot = check-in · tick = action done</span><span>Today</span>
-            </p>
-            {day && (
-              <div className="mt-4 rounded-2xl bg-surface-low p-4">
-                <p className="font-semibold">{shortDate(day.date)}</p>
-                <p className="mt-1 text-sm text-ink-soft">
-                  {day.S === null ? 'No score yet (baseline building).' : `Distance from baseline ${day.S.toFixed(2)}.`}
-                  {day.checkin ? ' Checked in.' : ' No check-in.'}
-                  {day.action_done ? ` Did today's action${day.rating ? `, rated ${day.rating}/5` : ''}.` : ''}
-                </p>
-                {dayWords.map((f) => <p key={f.ts} className="mt-2 text-sm italic">"{f.text}"</p>)}
-              </div>
-            )}
-          </Card>
-
-          <WhyPanel pid={pid} days={days} />
-          <ExactExplanation pid={pid} />
-        </div>
-
-        <div className="flex flex-col gap-6">
-          <Card>
-            <h2 className="text-lg font-semibold">How they've been feeling</h2>
-            <p className="text-sm text-ink-soft">Their own words, newest first</p>
-            <div className="mt-4 flex flex-col gap-4">
-              {t.feelings.length === 0 && <p className="text-sm text-ink-soft">No written or spoken check-ins in this period.</p>}
-              {t.feelings.map((f) => (
-                <div key={f.ts} className={`rounded-2xl p-3 ${f.crisis ? 'bg-terracotta-soft' : 'bg-surface'}`}>
-                  <p className="flex items-center justify-between text-xs text-ink-soft">
-                    <span>{shortDate(f.ts)} · {f.slot}</span>
-                    {f.tone && <span className={`rounded-full px-2 py-0.5 font-semibold ${toneStyle[f.tone]}`}>{f.tone}</span>}
-                  </p>
-                  <p className="mt-1.5 text-sm">{f.text.length > 220 ? f.text.slice(0, 217) + '…' : f.text}</p>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card>
-            <h2 className="text-lg font-semibold">What helps</h2>
-            <div className="mt-3 flex flex-col gap-2">
-              {t.what_helps.map((a) => (
-                <div key={a.key} className="flex items-center justify-between text-sm">
-                  <span>{a.label}</span>
-                  <span className="text-ink-soft">{a.tried ? `helped ${a.helped} of ${a.tried}` : 'not tried'}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card>
-            <h2 className="text-lg font-semibold">Healthy baseline</h2>
-            {b ? (
-              <>
-                <p className="mt-2 text-sm text-ink-soft">
-                  {b.status === 'building'
-                    ? `Building, day ${Math.ceil(b.days_elapsed)} of ${b.period_days}.`
-                    : `Active since ${b.locked_at ? shortDate(b.locked_at) : '-'}${b.confirmed_by ? `, confirmed by ${b.confirmed_by}` : ', not confirmed yet'}.`}
-                  {' '}{Object.values(b.checkins).reduce((x, y) => x + y, 0)} check-ins.
-                </p>
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {b.status === 'active' && !b.confirmed_by && (
-                    <button onClick={async () => { await views.confirmBaseline(pid, 'Dr. Virtanen'); load() }}
-                            className="rounded-full bg-primary px-4 py-2 text-sm font-semibold text-on-primary">Confirm baseline</button>
-                  )}
-                  <button onClick={async () => { await api.baselineAction(pid, 'start', {}); load() }}
-                          className="rounded-full bg-surface-high px-4 py-2 text-sm">Start a new baseline</button>
-                </div>
-              </>
-            ) : <p className="mt-2 text-sm text-ink-soft">No baseline yet.</p>}
-          </Card>
-        </div>
-      </div>
-      <p className="text-center text-xs text-ink-soft">Each patient is compared with their own baseline. Signals show what changed, not why. This is not a diagnosis.</p>
-    </div>
-  )
+function EntryLog({ page, error, selected, onSelect, compact = false }: { page: EntryPage | null; error: string; selected: number | null; onSelect: (id: number) => void; compact?: boolean }) {
+  if (!page) return <p className="cl-muted">{error || 'Loading entries…'}</p>
+  if (!page.entries.length) return <EmptyState icon="speaker_notes" title="No observations yet">Add an entry from the patient app, or use the isolated demo analysis panel.</EmptyState>
+  return <div className={`cl-entry-list ${compact ? 'is-compact' : ''}`}>{page.entries.slice(0, compact ? 5 : undefined).map((entry) => <button key={entry.id} onClick={() => onSelect(entry.id)} aria-pressed={selected === entry.id} className={selected === entry.id ? 'is-selected' : ''}><span className={`cl-entry-kind is-${entry.kind}`}><Icon name={entry.kind === 'voice' ? 'graphic_eq' : entry.kind === 'wearable' ? 'monitor_heart' : 'text_fields'} /></span><div className="cl-entry-row-main"><div><strong>{entry.kind === 'voice' ? 'Voice check-in' : entry.kind === 'wearable' ? 'Wearable observation' : 'Written check-in'}</strong><small>#{entry.id} · {timestamp(entry.ts)} · {entry.slot}</small></div><p>{entry.transcript_preview || (entry.kind === 'wearable' ? 'Stored wearable measurements' : 'No transcript recorded. Open the measurements to inspect this entry.')}</p><div className="cl-entry-row-meta"><OriginBadge origin={entry.data_origin} /><span>{entry.feature_count} features · {entry.scored_sources.length ? entry.scored_sources.join(' / ') : 'No scored branch'}</span>{entry.crisis && <Badge tone="alert">Crisis flag</Badge>}</div></div><Icon name="chevron_right" /></button>)}</div>
+}
+function EvidenceSummary({ workspace }: { workspace: ClinicalWorkspace }) {
+  const e = workspace.explanation
+  if (!e) return <EmptyState icon="account_tree" title="Not enough baseline-relative data yet">Raw model measurements are still available in each entry.</EmptyState>
+  const features = Object.entries(e.by_feature).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1])).slice(0, 5), scale = Math.max(...features.map(([, value]) => Math.abs(value)), .001)
+  return <><p className="cl-evidence-sentence">{e.sentence}</p><div className="cl-contribution-list">{features.map(([feature, value]) => <div key={feature}><div><span>{feature.replace(/_/g, ' ')}</span><strong>{value > 0 ? '+' : ''}{number(value, 3)}</strong></div><i><b style={{ width: `${Math.abs(value) / scale * 100}%`, background: value > 0 ? '#b58269' : '#77917d' }} /></i></div>)}</div><p className="cl-small-note">Exact contribution to S · {e.track} track. Earlier history contributes {number(e.older, 3)}.</p></>
+}
+function ActionList({ workspace }: { workspace: ClinicalWorkspace }) {
+  if (!workspace.actions.length) return <p className="cl-muted">No intervention responses in this window.</p>
+  return <div className="cl-actions-list">{workspace.actions.slice(0, 5).map((action) => <div key={`${action.date}-${action.arm_key}`}><span className="cl-action-check"><Icon name={action.completed ? 'check' : action.completed === false ? 'remove' : 'schedule'} /></span><div><strong>{action.label || action.arm_key || 'Suggested action'}</strong><span>{shortDay(action.date)} · {action.completed ? 'Completed' : action.completed === false ? 'Not today' : 'Awaiting response'}{isNumber(action.rating) ? ` · ${action.rating}/5` : ''}</span></div></div>)}</div>
 }

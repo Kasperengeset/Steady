@@ -25,7 +25,7 @@ The anchored track compares entries with the locked reference; the rolling track
 
 ## Saved evidence and older entries
 
-New check-ins atomically save their measurements and an `analysis_json` snapshot: artifact hashes, reference version and origin, exact centres/scales, time adjustment, signed z-scores, per-feature shares, branch deviations, observation weights, and state before/after. A failure to save that evidence fails the transaction. Reading an entry does not run inference again or change its stored result.
+New check-ins atomically save their measurements and an `analysis_json` snapshot: artifact hashes, reference version and origin, exact centres/scales, time adjustment, signed z-scores, per-feature shares, branch deviations, observation weights, engine settings, previous-day state and state before/after. The previous-day state makes the same-day EWMA arithmetic reproducible. A failure to save that evidence fails the transaction. Reading an entry does not run inference again or change its stored result.
 
 Rows created before this update retain their original measurements and transcripts. Their comparison can be reconstructed using available references and current artifacts, but their original per-entry decisions were not saved. The inspector labels that reconstruction and leaves historical before/after values unknown. Unmarked legacy data has unknown origin; it is never silently relabelled live.
 
@@ -42,4 +42,4 @@ This remains a local demonstration app with patient selection rather than produc
 
 ## Verification
 
-Backend tests use their own temporary database and disable cloud calls and background sync. The clinical tests check exact snapshot arithmetic and reference immutability, missing sources, old-entry reconstruction, append-only seeding, actual text inference, idempotent retries and API error cases. Frontend checks include the production TypeScript/Vite build and recording/service-worker tests. A manual browser pass is still needed for layout, physical microphone permission, Google consent and device push delivery when browser control is unavailable.
+Backend tests use their own temporary database and disable cloud calls and background sync. The clinical tests check exact snapshot arithmetic and reference immutability, missing sources, old-entry reconstruction, append-only seeding, actual text inference, idempotent retries and API error cases. Frontend checks include the production TypeScript/Vite build and recording/service-worker tests. `node --test scripts/test-clinical.mjs` from `frontend` also renders the inspector with controlled data to verify patient-context isolation, visible model evidence and missing transcription. A manual browser pass is still needed for layout, physical microphone permission, Google consent and device push delivery when browser control is unavailable.

@@ -186,3 +186,20 @@ def test_audit_failure_rolls_back_entry_features_and_rewards(client, monkeypatch
         assert s.exec(select(CheckIn)).all() == []
         assert s.exec(select(Feature)).all() == []
         assert s.exec(select(RewardLedger)).all() == []
+
+
+def test_same_day_snapshot_explains_ewma_against_previous_day(client):
+    reference(client)
+    first = diary(client, LOW)
+    second = diary(client, GOOD)
+    analysis = second["analysis"]
+    assert analysis["before"]["S"] == first["state"]["S"]
+    assert analysis["day_weights"]["anchored"]["text"] == [1.0, 0.5]
+    for track in ("anchored", "rolling"):
+        daily = analysis["after"][f"D_{track}"]
+        if daily is None:
+            continue
+        prior = (analysis["previous_day_state"] or {}).get(f"S_{track}")
+        alpha = analysis["engine"]["ewma_alpha"]
+        expected = daily if prior is None else alpha * daily + (1 - alpha) * prior
+        assert analysis["after"][f"S_{track}"] == pytest.approx(expected, abs=1e-5)

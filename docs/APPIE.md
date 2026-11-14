@@ -43,6 +43,6 @@ The synthetic seed script creates four demo profiles, a circle, custom hobbies a
 
 ## Validation
 
-Run `python -m pytest -q -p no:cacheprovider` from `backend`. The test configuration clears the Gemini key, disables warm-up and live sync, creates a temporary database, and aborts if that isolation changes. Run `node --test scripts/test-recording.mjs scripts/test-push.mjs` and `npm.cmd run build` from `frontend`.
+Run `python -m pytest -q -p no:cacheprovider` from `backend`. The test configuration clears the Gemini key, disables warm-up and live sync, creates a temporary database, and aborts if that isolation changes. Run `node --test scripts/test-recording.mjs scripts/test-push.mjs scripts/test-clinical.mjs` and `npm.cmd run build` from `frontend`.
 
 A migration check on a read-only backup preserves all clinical rows and the old wallet, survives a repeated upgrade, and exercises the patient APIs. Browser automation is unavailable in this session, so live microphone capture, visual browser review, actual Google consent and device push delivery still need a manual pass. The app continues to use demo patient selection; production sign-in and role authorization are separate work.
