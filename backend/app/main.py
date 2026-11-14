@@ -9,6 +9,7 @@ from . import push as push_mod
 from .config import settings
 from .db import engine, init_db
 from .routers import baselines, checkins, friends, interventions, patients, prompts, push, sim
+from .routers import companion, rewards, social
 from .seed import seed
 
 
@@ -39,6 +40,8 @@ app.add_middleware(
 
 for r in (checkins.router, interventions.router, patients.router, baselines.router, friends.router, sim.router,
           prompts.router, push.router):
+    app.include_router(r, prefix="/api")
+for r in (rewards.router, social.router, companion.router):  # engagement: #24, #26, #25
     app.include_router(r, prefix="/api")
 
 

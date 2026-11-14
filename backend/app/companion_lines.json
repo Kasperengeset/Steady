@@ -1,0 +1,22 @@
+{
+  "_rules": "Reviewed lines for the avatar's check-ins (#25). The avatar speaks in its own warm voice. Never: 'you haven't...', 'you broke your streak', guilt, scores, relapse, diagnoses, the clinic or doctors. Never mention how long the gap was. tests/test_companion.py checks every line against these rules.",
+  "missed_one_after_streak": [
+    {"id": "warm_spot", "text": "I kept your spot warm yesterday. Want to tell me about today?"},
+    {"id": "saved_seat", "text": "I saved you a seat by the window. Tell me how today is going?"},
+    {"id": "little_hello", "text": "Just a little hello from me. I'd love to hear about your day."}
+  ],
+  "missed_few": [
+    {"id": "missed_hearing", "text": "I've missed hearing from you. Even ten seconds is enough.", "offer_written": true},
+    {"id": "type_it", "text": "Thinking of you today. If talking feels like a lot, you can type a few words instead.", "offer_written": true},
+    {"id": "no_rush", "text": "No rush at all. Whenever you feel like it, a few words is plenty.", "offer_written": true}
+  ],
+  "short_memos": [
+    {"id": "short_days", "text": "Short days count too. Want to try today's small thing together?", "offer_action": true},
+    {"id": "together", "text": "Some days are quieter, and that's okay. Shall we do today's small thing together?", "offer_action": true}
+  ],
+  "back_after_break": [
+    {"id": "glad", "text": "There you are! I'm so glad to see you."},
+    {"id": "glad_warm", "text": "Hello again! It's really nice to hear from you."},
+    {"id": "glad_light", "text": "Oh, hi! You just made my day brighter."}
+  ]
+}
