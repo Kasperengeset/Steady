@@ -78,19 +78,35 @@ def zscores(today: dict[str, float], history: dict[str, list[float]], direction:
     return out
 
 
-def branch_deviation(z: dict[str, float], model: BranchModel) -> float:
-    """Weighted sum of z-scores, rescaled to unit variance under 'no change'.
-
-    With weights summing to 1, sum(w*z) is a weighted *mean* whose noise SD is sqrt(sum w^2) (≈0.36 for
-    8 features), so fixed escalation thresholds (S > 1, S > 2) would almost never trigger. Dividing by
-    sqrt(sum w^2) makes D ~ N(0, 1) when nothing changes (assuming independent features; real features
-    are correlated, so true noise is somewhat larger).
-    """
-    w = {k: model.weights.get(k, 0.0) for k in z}
-    norm = sum(v * v for v in w.values()) ** 0.5
-    if norm == 0:
+def _corr(model: BranchModel, a: str, b: str) -> float:
+    """Within-person correlation between two features' direction-adjusted z-scores (0 if unknown)."""
+    if a == b:
+        return 1.0
+    wc = model.meta.get("within_corr")
+    if not wc:
         return 0.0
-    return sum(w[k] * v for k, v in z.items()) / norm
+    idx = {f: i for i, f in enumerate(wc["features"])}
+    if a not in idx or b not in idx:
+        return 0.0
+    r = wc["matrix"][idx[a]][idx[b]]
+    return r * model.direction.get(a, 1) * model.direction.get(b, 1)
+
+
+def branch_deviation(z: dict[str, float], model: BranchModel) -> float:
+    """Weighted sum of z-scores, rescaled to unit variance under 'no change' (STATUS.md B10, B12).
+
+    Var(sum w*z) = sum_ij w_i w_j R_ij, where R is the within-person correlation of the (direction-
+    adjusted) z-scores, measured on Androids and stored in <branch>.json["within_corr"]. Dividing by its
+    square root makes D ~ N(0, 1) when nothing changes, so escalation thresholds (S > 1, S > 2) keep a
+    fixed meaning even though e.g. energy and arousal move together. Without a correlation matrix the
+    features are treated as independent (norm = sqrt(sum w^2)).
+    """
+    keys = list(z)
+    w = {k: model.weights.get(k, 0.0) for k in keys}
+    var = sum(w[a] * w[b] * _corr(model, a, b) for a in keys for b in keys)
+    if var <= 0:
+        return 0.0
+    return sum(w[k] * z[k] for k in keys) / var**0.5
 
 
 def daily_deviation(branch_D: dict[str, float]) -> float | None:

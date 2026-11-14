@@ -4,8 +4,9 @@
   backend/.venv/bin/python ml/train_weights.py --features X.csv # any clip CSV with the same columns
 
 Speaker-level logistic regression (depressed vs control), speaker-independent CV with the
-corpus' fold-list.csv. Writes:
-  backend/app/engine/weights/acoustic.json   w_i = |beta_i| (normalised), s_i = sign(beta_i)
+corpus' fold-list.csv, validates that the features carry signal. The weights the app uses come
+from ml/change_weights.py (Fisher LDA in within-person units). Writes:
+  backend/app/engine/weights/acoustic.json   change-detection weights + within-person correlation
   ml/reports/acoustic/{roc.png, coefficients.png, summary.md}
 
 Honest framing: a between-person classifier, used only as a *prior* for which features matter
@@ -29,6 +30,7 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import change_weights  # noqa: E402
 from corpus import FEATURES, ROOT, emb_name  # noqa: E402
 
 warnings.filterwarnings("ignore", category=pd.errors.PerformanceWarning)
@@ -164,21 +166,44 @@ def main() -> None:
     if disagree:
         print("  ⚠️  multivariate sign contradicts literature for:", disagree, "→ keeping literature direction")
 
+    # Change-detection weights (what the app uses): Fisher LDA in within-person units, from corpus data
+    cls_fold_w = {}
+    for k in sorted(set(folds) - {-1}):
+        b = model().fit(X_app[folds != k], y[folds != k])[-1].coef_[0]
+        cls_fold_w[int(k)] = {f: float(abs(v) / (np.abs(b).sum() or 1.0)) for f, v in zip(feats, b)}
+    change = change_weights.fit(
+        clips, feats, LITERATURE, weights, dict(zip(spk["speaker"], folds.tolist())), cls_fold_w
+    )
+    det = change["detectability"]["held_out_mean"]
+    print("  change weights (app):", change["weights"])
+    print("  detectability held-out (D shift for full relapse, noise SD = 1):",
+          ", ".join(f"{k} {v:.2f}" for k, v in det.items()))
+    print(f"  → app uses '{change['used']}' weights (held-out ties; see STATUS.md B12)")
+
     payload = {
         "branch": "acoustic",
-        "weights": weights,
-        "direction": direction,
-        "beta_standardised": {f: round(float(b), 4) for f, b in zip(feats, beta)},
-        "C": float(np.atleast_1d(final[-1].C_)[0]),
+        # Engine reads these three: change-detection weights + within-person correlation (STATUS.md B12)
+        "weights": change["weights"],
+        "direction": change["direction"],
+        "within_corr": change.pop("within_corr"),
+        "change_model": change,
+        # Between-person classifier: validates that the features carry depression signal (AUC)
+        "classifier": {
+            "weights": weights,
+            "direction": direction,
+            "beta_standardised": {f: round(float(b), 4) for f, b in zip(feats, beta)},
+            "C": float(np.atleast_1d(final[-1].C_)[0]),
+            "literature_disagreements": disagree,
+        },
         "auc": {k: v for k, v in results["app"].items() if not k.startswith("_")},
         "auc_reference": {k: r["mean"] for k, r in results.items() if k != "app"},
-        "literature_disagreements": disagree,
         # Speaker-level distributions (derived stats, no audio) – the simulator uses these for realistic effect sizes
         "feature_stats": {
             f: {
                 "control_mean": round(float(spk.loc[y == 0, f"app_{f}"].mean()), 5),
                 "patient_mean": round(float(spk.loc[y == 1, f"app_{f}"].mean()), 5),
                 "sd": round(float(np.sqrt((spk.loc[y == 0, f"app_{f}"].var() + spk.loc[y == 1, f"app_{f}"].var()) / 2)), 5),
+                "within_sd": change["within_sd"][f],
             }
             for f in feats
         },
@@ -229,25 +254,55 @@ def write_reports(results: dict, y: np.ndarray, feats: list[str], beta: np.ndarr
     rows = "\n".join(
         f"| {labels.get(k, k)} | {r['mean']:.3f} ± {r['std']:.3f} | {r['pooled']:.3f} |" for k, r in results.items()
     )
+    cls, chg = payload["classifier"], payload["change_model"]
     coef_rows = "\n".join(
-        f"| `{f}` | {b:+.3f} | {payload['weights'][f]:.3f} | {'⚠️ sign flips (collinearity) – literature direction kept' if f in payload['literature_disagreements'] else 'agrees'} |"
+        f"| `{f}` | {b:+.3f} | {cls['weights'][f]:.3f} | {'⚠️ sign flips (collinearity)' if f in cls['literature_disagreements'] else 'agrees'} |"
         for f, b in sorted(zip(feats, beta), key=lambda t: -abs(t[1]))
+    )
+    change_rows = "\n".join(
+        f"| `{f}` | {chg['delta_within'][f]:+.2f} | **{payload['weights'][f]:.3f}** | {cls['weights'][f]:.3f} | {chg['fisher_weights'][f]:+.3f} |"
+        for f in sorted(feats, key=lambda f: -abs(chg['delta_within'][f]))
+    )
+    det = chg["detectability"]
+    det_rows = "\n".join(
+        f"| {m} | {det['in_sample'][m]:.2f} | {det['held_out_mean'][m]:.2f} | {det['held_out_per_fold'][m]} |" for m in det["in_sample"]
     )
     (out / "summary.md").write_text(f"""# Acoustic branch – training summary
 
 Trained {payload['trained_at']} on `{payload['trained_on']}` · {payload['n_speakers']} speakers ({payload['n_depressed']} depressed) · folds: {payload['folds']}
 
-## Speaker-independent AUC
+## 1. Do the features carry depression signal? (between-person classifier)
 
 | Model | AUC (mean ± sd over folds) | Pooled out-of-fold |
 |---|---|---|
 {rows}
 
-## Coefficients (standardised; + = higher value → more likely depressed)
+Standardised logistic-regression coefficients (+ = higher value → more likely depressed):
 
-| Feature | β | Weight in app | vs. literature |
+| Feature | β | Classifier weight | vs. literature |
 |---|---|---|---|
 {coef_rows}
+
+## 2. Weights the app uses: change detection (within-person units)
+
+The app compares a person with their own baseline, so weights come from how far depression shifts each
+feature relative to one person's clip-to-clip variation, accounting for correlated features
+(`ml/change_weights.py`). **Used: `{chg['used']}`** – on held-out folds all weightings tie within noise,
+so the simplest one without fitting is used. Fisher (sign-constrained, shrinkage {chg['shrinkage']}) is kept for reference.
+
+| Feature | δ (group difference / within-person SD) | **Weight in app** | Classifier weight | Fisher weight |
+|---|---|---|---|---|
+{change_rows}
+
+**Detectability** = expected shift of the score D (noise SD = 1) for a full control→patient change.
+Held-out = weights fitted on 4 folds, evaluated on the 5th fold's speakers.
+
+| Weighting | In-sample | Held-out mean | Held-out per fold |
+|---|---|---|---|
+{det_rows}
+
+Caveat: within-person SD comes from clips of one session, so real day-to-day noise is larger and real
+detectability lower.
 
 ![ROC](roc.png) ![Coefficients](coefficients.png)
 

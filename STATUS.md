@@ -1,7 +1,7 @@
 # STATUS – Beyond the Clinic
 
 > Levende dokument: hva som er bygget, hva vi har lært om modellen, hvilke valg vi har tatt og hvorfor, og hva som gjenstår.
-> **Oppdater denne når noe endres.** Detaljert opprinnelig plan: [`docs/plan.md`](docs/plan.md). Siste oppdatering: lør 14.11.2026.
+> **Oppdater denne når noe endres.** Detaljert opprinnelig plan: [`docs/plan.md`](docs/plan.md). Siste oppdatering: lør 14.11.2026 (branch `acoustic-model`).
 
 ## Kjernebudskap
 
@@ -65,10 +65,12 @@ Første modellversjon (C valgt etter AUC):
 - bare wav2vec2-trekkene: 0,73
 - begge: 0,76 (de overlapper mye)
 
-### Gjeldende vekter (`acoustic.json`)
-`arousal` 0,18 · `jitter` 0,18 · `valence` 0,17 · `energy` 0,14 · `f0_std` 0,13 · `shimmer` 0,10 · `speech_rate` 0,07 · `pause_ratio` 0,04
-
-Alle retninger stemmer med litteraturen. `pause_ratio` snur fortegn i den samlede modellen (kollinearitet, se beslutning B6), så der beholdes litteraturens retning.
+### Gjeldende vekter i appen (`acoustic.json`) – endret 14.11, se B12
+**Like vekter (0,125 hver), litteraturens retninger, og D normalisert med samvariasjonen innen person.**
+- Vi testet fire vektinger på holdt-ute folds (like vekter, klassifikator, følsomhet per trekk, Fisher). Alle ga samme resultat innenfor støyen (se «Vekter for endring»), så vi bruker den enkleste.
+- Klassifikatorvektene (`arousal` 0,18 · `jitter` 0,18 · `valence` 0,17 · …) ligger fortsatt i `acoustic.json["classifier"]` som referanse.
+- Data støtter **hvilke trekk** og **hvilken retning**, men ikke finjusterte vekter.
+- Alle retninger stemmer med litteraturen. `pause_ratio` snur fortegn i samlede modeller (kollinearitet, B6).
 
 ### Kjente svakheter og sjekker
 - **Mellom- vs. innen-person:** klassifikatoren er trent på forskjeller *mellom* personer, men brukes til endring *innen* én person. Vektene er en prior, og baselinen er kjernen.
@@ -110,23 +112,28 @@ Kjører den **ekte motoren** (`state.py`, `bandit.py`, `escalation.py`, trent `a
 - Banditen velger tiltak. Hvert tiltak har en skjult «sann» nytte.
 - API: `POST /api/sim/run` gir én pasient. `GET /api/sim/robustness?seeds=50` gir tall over mange pasienter, og **det er de tallene som skal brukes utad, ikke ett heldig frø.**
 
-**Resultater over 50 syntetiske pasienter:**
+**Resultater over 50 syntetiske pasienter, med *målt* støy og samvariasjon fra Androids (oppdatert 14.11):**
 
-| | Glidende baseline (dagens app) | Fast «frisk baseline» (T1) |
-|---|---|---|
-| Tilbakefall som ikke oppdages | **21/50** | **0/50** |
-| Falske alarmer før tilbakefall (snitt, dager) | 1,56 | 0,38 |
-| Oppdaget før selvrapport (median) | ~1 dag (bare de oppdagede) | ~0,5 dag |
-| Banditen finner beste tiltak | 19/50 (tilfeldig ≈ 8/50) | |
+| Støy fra dag til dag | Bom, glidende baseline | **Bom, fast baseline (T1)** | Falske alarmer (fast baseline, snitt dager) |
+|---|---|---|---|
+| ×1,0 (målt innen én økt) | 41/50 | **13/50** | 0,36 |
+| ×1,5 | 43/50 | **25/50** | 0,38 |
+| ×2,0 | 45/50 | **32/50** | 0,42 |
+
+⚠️ **Tidligere tall (0/50 bom) var for optimistiske.** De bygde på en gjettet støy (0,6 × variasjonen mellom personer) og antok uavhengige trekk.
 
 Tolkning:
-- **Den faste baselinen er nødvendig.** Den glidende «spiser» tilbakefallet. I frø 0 stiger S til 1,35 og synker til −0,2 mens pasienten fortsatt er syk.
-- **Vi oppdager ikke tilbakefall tydelig tidligere enn selvrapport**, selv med en antatt forsinkelse på 4 dager i selvrapporten. Gevinsten er at vi oppdager det *passivt og pålitelig* (0/50 bommer) uten at pasienten må fylle ut skjema. Ikke påstå tidlig varsling i pitchen uten å ha vist det.
-- **Banditen lærer svakt på 70 dager.** Belønningen er maks 0,5, fordi «ble tilstanden bedre?» ikke er koblet inn (T8).
-- **Antakelser** (følger med i API-svaret): dag-til-dag-støy = 0,6 × variasjonen mellom personer, selvrapport 4 dager forsinket, og uavhengig støy i trekkene (ekte trekk henger sammen, så signalet er noe overvurdert).
+- **Den faste baselinen er nødvendig.** Den glidende «spiser» tilbakefallet: 41/50 bom.
+- **Stemmen alene fanger bare omtrent halvparten av tilbakefallene** ved realistisk støy (×1,5–2). Et fullt tilbakefall flytter D bare ~1,6 SD (se «detectability»), og alarmen krever S > 1 i 3 dager. Det trengs:
+  - flere målinger per dag (morgen og kveld, snitt gir støy / √2)
+  - kalibrerte grenser (T12)
+  - tekst- og helsegrenen
+- **Vi oppdager ikke tilbakefall tidligere enn selvrapport** (median ~0 dager). Ikke påstå tidlig varsling i pitchen.
+- **Banditen lærer svakt på 70 dager** (19/50 fant beste tiltak med de gamle innstillingene). Belønningen er maks 0,5, fordi «ble tilstanden bedre?» ikke er koblet inn (T8).
+- **Antakelser** (følger med i API-svaret): målt støy innen én økt × `day_noise_factor`, målt samvariasjon, og selvrapport 4 dager forsinket.
 
 ### Svakhet: langsomt tilbakefall glir inn i baselinen ⚠️ (bekreftet i simulatoren)
-Den glidende baselinen på 14 dager tilpasser seg et tilbakefall som kommer sakte over uker. **Simulatoren viser at 21/50 tilbakefall går tapt.** Løsningen (T1, høyeste prioritet) er:
+Den glidende baselinen på 14 dager tilpasser seg et tilbakefall som kommer sakte over uker. **Med målt støy går 41/50 tilbakefall tapt med glidende baseline, mot 13/50 med fast.** Løsningen (T1, høyeste prioritet) er:
 - **fast «frisk baseline»** fra de første ~2 ukene etter behandling, som fanger langsom glidning
 - **glidende baseline** for de siste 14 dagene, som fanger brå endring
 
@@ -162,6 +169,7 @@ Klassifikatoren lærer å skille *personer*. Appen skal oppdage *endring innen p
 
 - Medianforholdet mellom variasjon innen og mellom personer er **0,70** (simulatoren antar 0,6).
 - **Forbehold:** klippene er fra samme økt og samme mikrofon, så variasjonen fra dag til dag er større, særlig for `energy`, som avhenger av avstanden til telefonen. Tallene for `energy` og `arousal` er derfor optimistiske.
+- **Oppfølging (B12):** testet på holdt-ute folds slår ingen av vektingene like vekter. Tabellen viser hva som *flytter seg*, men dataene er for små til å finjustere vekter. Se `ml/reports/acoustic/summary.md` del 2.
 
 ### Røyktest på egne opptak (14.11, 8 klipp: Kasper og Mahdan, 2 bra og 2 dårlige hver)
 Samme DJI-mikrofon og samme dag. Lyd og trekk fra opptakene er **ikke** lagt i repoet.
@@ -188,6 +196,12 @@ Funn:
 
 Forbehold: n = 2 personer; de dårlige klippene er muligens spilt og dermed overdrevne; samme økt (variasjon over dager er større); SD hentet fra korpuset.
 
+**Med motoren slik den er nå** (like vekter og normalisering med samvariasjon, B12):
+- Kasper: normal svingning ±1,07, dårlige klipp 0,71 / 0,84 → **ikke skilt**.
+- Mahdan: normal svingning ±0,53, dårlige klipp 1,90 / 2,42 → **skilt**.
+
+Kaspers endring lå mest i arousal og valens, som henger tett sammen. Normaliseringen teller dem nå som ett signal, ikke to. Vi justerer **ikke** vektene etter dette (B13): holdt-ute-testen på 114 personer veier tyngre enn 2 personer.
+
 ### Forutsetninger for at det skal virke
 En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
 1. **Baselinen trenger 1–2 uker**, ikke én dag (~7–14 innsjekker med hverdager, helg, morgen og kveld).
@@ -200,14 +214,14 @@ En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
 8. **Simulatortallene bygger på antakelser.** Virkelig ytelse krever en pilot over tid.
 
 ### Forbedringsplan (prioritert)
-1. **T1** fast «frisk baseline». Simulatoren: 21/50 → 0/50 bom.
-2. **T13** vekter for endring ∝ d innen person (tabellen over). Klassifikatoren brukes bare til retning og validering, og simulatoren får målt støy i stedet for 0,6.
+1. **T1** fast «frisk baseline». Simulatoren med målt støy: 41/50 → 13/50 bom.
+2. ~~**T13** vekter for endring~~ ✅ testet: alle vektinger er like gode på holdt-ute data, så appen bruker like vekter (B12). Simulatoren bruker målt støy.
 3. **T14** opptaksprotokoll og kvalitetssjekk:
    - samme spørsmål, minst 20 s, fast avstand
    - avvis opptak med lite tale, klipping eller lav signal/støy
    - lydstyrke relativt til bakgrunnsstøy
 4. **T10** mer robust baseline: median/MAD, morgen og kveld hver for seg, minst ~7 innsjekker.
-5. **T15** ta hensyn til samvariasjon mellom trekk (Mahalanobis), så samme signal ikke telles dobbelt og gir falske alarmer.
+5. ~~**T15** samvariasjon mellom trekk~~ ✅ D normaliseres med den målte samvariasjonen innen person (B12). Støyen i D var undervurdert med 27 %.
 6. **T12** kalibrere grensene i simulatoren mot et akseptabelt antall falske alarmer per pasient-måned.
 7. **T3/T4** tekst- og helsegrenen: uavhengige kilder gir den største reelle gevinsten.
 8. Høyere AUC (flere eGeMAPS-trekk, kjønnsnormalisering, lese- og intervjuoppgaven samlet). Minst viktig for produktet.
@@ -230,6 +244,8 @@ En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
 | B9 | Samme uttrekkskode i trening (`ml/`) og app (`backend/app/pipeline/`) | Vektene blir gyldige for appens trekk |
 | B10 | Delscore per gren skaleres: `D_b = Σ w·z / √(Σ w²)` | Med vekter som summerer til 1 var D et vektet snitt med SD ≈ 0,36, så eskaleringsgrensene (S > 1, S > 2) ble nesten aldri nådd. Nå er D ~ N(0, 1) når ingenting endrer seg |
 | B11 | Simulatoren bruker den ekte motoren og effektstørrelser fra korpuset | Demoen viser det systemet faktisk gjør; robusthet måles over 50 frø |
+| B12 | **Like vekter + normalisering med samvariasjon innen person** (`ml/change_weights.py`) | På holdt-ute folds ga like vekter 1,58, klassifikator 1,58, følsomhet per trekk 1,61 og Fisher 1,54 (forskyvning i D ved fullt tilbakefall). Variasjonen mellom foldene (0,8–3,1) er mye større, så dataene kan ikke skille vektingene, og vi velger den enkleste. Samvariasjonen *er* målbar og gjør at D har SD 1 (før: 1,27 → for mange falske alarmer) |
+| B13 | Vekter velges **ikke** etter egne testopptak | 2 personer er en test, ikke treningsdata. Å justere vektene til testklippene ser pent ut, men er overtilpasning |
 
 ---
 
@@ -237,7 +253,7 @@ En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
 
 *T-nummer = oppgave her. B-nummer = beslutning i seksjon 4.*
 
-- [ ] **T1 (høyest prioritet)** Fast «frisk baseline» i tillegg til den glidende (`engine/state.py`, `routers/checkins.py`). Simulatoren viser 21/50 bom uten den, 0/50 med.
+- [ ] **T1 (høyest prioritet)** Fast «frisk baseline» i tillegg til den glidende (`engine/state.py`, `routers/checkins.py`). Simulatoren med målt støy: 41/50 bom uten den, 13/50 med.
 - [ ] **T2** Ved talt innsjekk skal plassholderen for Gemini **ikke** legge tilfeldige tekst-trekk inn i scoren, bare transkripsjon og krise-flagg (`pipeline/__init__.py`)
 - [ ] **T3** Tekst-grenen: trene på teamets tekstdatasett → `weights/text.json`
 - [ ] **T4** Helse-grenen: Fitbit/Google Health-adapter, vekter fra Depresjon-datasettet (aktivitet minutt for minutt, MADRS)
@@ -249,9 +265,10 @@ En god «frisk baseline» er **nødvendig, men ikke tilstrekkelig**.
 - [ ] **T10** Baseline: høyere minimum (~5–7 innsjekker før z-score) og egen baseline for morgen og kveld (`state.zscores`, `_baseline_history`)
 - [x] Simulator med den ekte motoren (`sim/simulator.py`, `/api/sim/run`, `/api/sim/robustness`)
 - [ ] **T11** Demo-visning i frontend: slider over dagene, S (glidende vs. fast) mot selvrapport, og hva banditen har lært (typer finnes i `frontend/src/lib/api.ts`)
-- [ ] **T13** Vekter for endring ∝ d innen person, målt på Androids. Simulatoren skal bruke målt støy (se «Vekter for endring»)
+- [x] **T13** Vekter for endring testet på holdt-ute data: ingen vekting slår like vekter, så vi bruker like vekter (B12). Simulatoren bruker målt støy og samvariasjon
 - [ ] **T14** Opptaksprotokoll og kvalitetssjekk: lite tale, klipping, signal/støy; lydstyrke relativt til bakgrunnsstøy
-- [ ] **T15** Ta hensyn til samvariasjon mellom trekk (Mahalanobis-avstand) for færre falske alarmer
+- [x] **T15** D normaliseres med målt samvariasjon innen person (`state.branch_deviation`)
+- [ ] **T16** To innsjekker per dag (morgen og kveld) brukt sammen i scoren: halverer støyvariansen. Test gevinsten i simulatoren
 - [ ] **T12** Kalibrere eskaleringsgrensene: avveining mellom hvor raskt vi oppdager og antall falske alarmer, over mange frø i simulatoren
 
 ---

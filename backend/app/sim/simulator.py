@@ -20,6 +20,8 @@ import random
 import statistics
 from dataclasses import dataclass
 
+import numpy as np
+
 from ..engine import bandit, escalation, state
 
 ARMS = {  # key: (label, hidden true helpfulness for this persona)
@@ -51,7 +53,7 @@ def simulate(
     seed: int = 0,
     relapse_day: int = 40,
     relapse_len: int = 15,
-    noise_frac: float = 0.6,
+    day_noise_factor: float = 1.0,
     self_report_lag: int = 4,
     baseline_days: int = 14,
 ) -> dict:
@@ -62,6 +64,13 @@ def simulate(
         raise RuntimeError("acoustic.json has no feature_stats – rerun ml/train_weights.py")
     feats = list(stats)
     offset = {f: rng.gauss(0, stats[f]["sd"] * 0.8) for f in feats}  # this person's own voice
+    # Day-to-day noise: within-person SD and correlation measured on Androids (clips of one session),
+    # scaled by day_noise_factor because real day-to-day noise is larger than within-session noise.
+    wc = model.meta["within_corr"]
+    order = [feats.index(f) for f in wc["features"]]
+    chol = np.linalg.cholesky(np.array(wc["matrix"]))
+    wsd = np.array([stats[f]["within_sd"] for f in wc["features"]]) * day_noise_factor
+    nrng = np.random.default_rng(seed)
     arms = [SimArm(k) for k in ARMS]
 
     d, hist_d = 0.1, []
@@ -77,9 +86,9 @@ def simulate(
         d = min(1.0, max(0.0, 0.7 * d + 0.3 * target + rng.gauss(0, 0.04)))
 
         # --- spoken check-in → features -------------------------------------------------
+        noise = dict(zip(wc["features"], wsd * (chol @ nrng.standard_normal(len(order)))))
         x = {
-            f: offset[f] + s["control_mean"] + d * (s["patient_mean"] - s["control_mean"])
-            + rng.gauss(0, s["sd"] * noise_frac)
+            f: offset[f] + s["control_mean"] + d * (s["patient_mean"] - s["control_mean"]) + noise[f]
             for f, s in stats.items()
         }
 
@@ -160,9 +169,9 @@ def simulate(
         "true_best_arm": best_true,
     }
     assumptions = {
-        "noise_frac": f"day-to-day noise = {noise_frac} × between-person SD (unknown in reality)",
+        "day_noise": f"day-to-day noise = {day_noise_factor} × within-person SD measured on Androids (one session; real day-to-day noise is larger)",
         "self_report_lag": f"self-reported mood lags the latent state by {self_report_lag} days (ASSUMPTION, not evidence)",
-        "independent_noise": "feature noise is independent; real features are correlated → signal is somewhat overstated",
+        "correlated_noise": "feature noise uses the within-person correlation measured on Androids",
         "effect_sizes": "feature shifts from Androids corpus (patients vs controls)",
     }
     return {"days": out, "summary": summary, "assumptions": assumptions, "weights_trained": model.trained}

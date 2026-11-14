@@ -4,6 +4,7 @@ Model card: https://huggingface.co/audeering/wav2vec2-large-robust-12-ft-emotion
 Licence CC-BY-NC-SA 4.0. Outputs arousal, dominance, valence in ~[0, 1].
 """
 
+import threading
 from functools import lru_cache
 
 import numpy as np
@@ -24,8 +25,18 @@ def _device():
     return "cpu"
 
 
-@lru_cache(maxsize=1)
+_LOCK = threading.Lock()
+
+
 def _model():
+    """Load once, thread-safe: the startup warm-up thread and the first request may call this at the
+    same time, and concurrent first imports of transformers fail (ImportError)."""
+    with _LOCK:
+        return _load_model()
+
+
+@lru_cache(maxsize=1)
+def _load_model():
     import torch
     import torch.nn as nn
     from transformers import Wav2Vec2Processor
