@@ -34,7 +34,9 @@ def main() -> None:
     print(f"{TEXT_MODEL} replied: {(r.output_text or '').strip()!r}")
 
     try:
-        names = {m.name.removeprefix("models/") for m in client.models.list()}
+        # gemini-3.5-transcribe is only listed on v1beta (the transcription docs use v1beta too)
+        beta = genai.Client(api_key=key, http_options={"api_version": "v1beta"})
+        names = {m.name.removeprefix("models/") for m in beta.models.list()}
         for m in (TEXT_MODEL, TRANSCRIBE_MODEL):
             print(f"{m}: {'available' if m in names else 'NOT in model list'}")
     except Exception as e:  # noqa: BLE001

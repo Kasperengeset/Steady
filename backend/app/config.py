@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=REPO_ROOT / ".env", extra="ignore")
 
     gemini_api_key: str = ""
+    # Spoken check-ins: verbatim transcript (pipeline/llm.py). The text model is English only.
+    transcribe_model: str = "gemini-3.5-transcribe"
+    transcribe_language: str = "en-US"
     database_url: str = f"sqlite:///{DATA_DIR / 'app.db'}"
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
     # Rolling baseline (last N days) and EWMA smoothing – see docs/plan.md §4

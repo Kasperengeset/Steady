@@ -9,15 +9,16 @@ fail=0
 
 # 1. Files that must never be committed
 while IFS= read -r f; do
-  base=$(basename "$f")
-  case "$f" in
+  lf=$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')  # match Bad1.WAV, .ENV etc. too
+  base=$(basename "$lf")
+  case "$lf" in
     *.env.example) ;;
     .env|*/.env|.env.*|*/.env.*)
       echo "BLOCKED  $f  (secrets file)"; fail=1 ;;
     *.pem|*.key|*credentials*.json|*client_secret*.json|*service-account*.json)
       echo "BLOCKED  $f  (credentials)"; fail=1 ;;
-    data/*|*.db|*.wav|*.mp3|*.m4a|*.flac|*.ogg|*.webm|*.zip)
-      echo "BLOCKED  $f  (data or audio – Androids/Depresjon/Reddit may not be redistributed)"; fail=1 ;;
+    data/*|recorded_voice/*|*/recorded_voice/*|*.db|*.wav|*.mp3|*.m4a|*.aac|*.flac|*.ogg|*.opus|*.webm|*.aiff|*.mp4|*.zip)
+      echo "BLOCKED  $f  (data or audio – recordings and datasets never go on GitHub)"; fail=1 ;;
   esac
   case "$base" in
     token*.json) echo "BLOCKED  $f  (token file)"; fail=1 ;;
@@ -27,10 +28,11 @@ done <<< "$staged"
 # 2. Key-shaped strings in the added lines
 added=$(git diff --cached -U0 --no-color | grep -E '^\+[^+]' || true)
 # Written so that this line does not match itself ("private_[k]ey" matches "private_key").
-patterns='AIza[0-9A-Za-z_-]{35}|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|ya29\.[0-9A-Za-z_-]{20,}|"private_[k]ey":|sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}'
+# Google keys come as AIza... (classic) and AQ.... (newer AI Studio format).
+patterns='AIza[0-9A-Za-z_-]{35}|AQ\.[0-9A-Za-z_-]{30,}|-----BEGIN ([A-Z]+ )?PRIVATE KEY-----|ya29\.[0-9A-Za-z_-]{20,}|"private_[k]ey":|sk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}'
 if printf '%s\n' "$added" | grep -qE "$patterns"; then
   echo "BLOCKED  staged changes contain something that looks like an API key, token or private key:"
-  git diff --cached -U0 --no-color | grep -nE "$patterns" | sed -E 's/(AIza|ya29\.|sk-|gh[pousr]_)[0-9A-Za-z_.-]{6,}/\1<hidden>/g' | head -5
+  git diff --cached -U0 --no-color | grep -nE "$patterns" | sed -E 's/(AIza|AQ\.|ya29\.|sk-|gh[pousr]_)[0-9A-Za-z_.-]{6,}/\1<hidden>/g' | head -5
   fail=1
 fi
 

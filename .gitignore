@@ -26,13 +26,18 @@ token*.json
 
 # Data – Androids Corpus must NEVER be committed (non-commercial, no redistribution)
 data/
+recorded_voice/
 *.db
-*.wav
-*.webm
-*.ogg
-*.mp3
-*.m4a
-*.flac
 *.zip
+# Audio in any letter case (Bad1.WAV): own recordings never go on GitHub either
+*.[wW][aA][vV]
+*.[wW][eE][bB][mM]
+*.[oO][gG][gG]
+*.[mM][pP]3
+*.[mM]4[aA]
+*.[aA][aA][cC]
+*.[fF][lL][aA][cC]
+*.[oO][pP][uU][sS]
+*.[aA][iI][fF][fF]
 
 # backend/app/engine/weights/*.json IS committed: derived coefficients, not corpus data
