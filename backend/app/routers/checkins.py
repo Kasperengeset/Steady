@@ -89,6 +89,7 @@ def _score_tracks(
     D = {"anchored": {}, "rolling": {}}
     Z = {"anchored": {}, "rolling": {}}
     shares = {"anchored": {}, "rolling": {}}
+    used_stats = {"anchored": {}, "rolling": {}}
     for branch, vals in today_by_branch.items():
         model = state.load_branch(branch)
         tracks = {
@@ -96,12 +97,14 @@ def _score_tracks(
             "rolling": state.history_stats(hist, model, k, settings.rolling_min_n),
         }
         for track, stats in tracks.items():
+            used_stats[track][branch] = stats
             z = state.zscores(vals, stats, model.direction)
             if z:
                 Z[track][branch] = z
                 shares[track][branch] = state.feature_shares(z, model)
                 D[track][branch] = round(sum(shares[track][branch].values()), 4)
-    return {"D": D, "Z": Z, "shares": shares}
+    return {"D": D, "Z": Z, "shares": shares, "stats": used_stats,
+            "adjusted": today_by_branch, "hour_slopes": slopes}
 
 
 def _todays_intervention(s: Session, patient_id: int, today: date, top: list[dict] | None = None) -> InterventionOut:
@@ -216,7 +219,8 @@ def create_wearable_checkin(body: WearableDayIn, s: Session = Depends(get_sessio
 def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineResult,
                     extras: dict[str, float] | None = None,
                     recorded_at: datetime | None = None,
-                    request_key: str | None = None) -> CheckInResponse:
+                    request_key: str | None = None,
+                    data_origin: str = "live") -> CheckInResponse:
     """Store features, run the state engine, escalate, pick today's intervention."""
     patient_id = patient.id
     # Serialize state updates for a person. A retried request cannot append another
@@ -228,10 +232,17 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
         s.commit()
         return saved
     now = recorded_at or _now()
+    if data_origin not in ("live", "synthetic"):
+        raise ValueError("data_origin must be live or synthetic")
+    from .. import clinical
+    previous_score = s.exec(select(StateScore).where(
+        StateScore.patient_id == patient_id, StateScore.date <= now.date())
+        .order_by(col(StateScore.date).desc())).first()
+    before = clinical.score_point(previous_score)
     checkin = CheckIn(
         patient_id=patient_id, ts=now, slot=slot,
         transcript=result.transcript, llm_json=result.llm_json, risk_flag=result.crisis,
-        speech_s=result.speech_s, request_key=request_key,
+        speech_s=result.speech_s, request_key=request_key, data_origin=data_origin,
     )
     s.add(checkin)
     s.flush()
@@ -261,6 +272,11 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
     driver: str | None = None
     branch_D: dict[str, float] = {}
     top_now: list[dict] | None = None
+    tr = {"D": {"anchored": {}, "rolling": {}}, "Z": {"anchored": {}, "rolling": {}},
+          "shares": {"anchored": {}, "rolling": {}}, "stats": {"anchored": {}, "rolling": {}},
+          "adjusted": {}, "hour_slopes": {}}
+    entry_weights: dict[str, float] = {}
+    score = None
     if active is not None:
         tr = _score_tracks(s, patient_id, now, slot, today_by_branch, active, checkin.local_hour)
         prev = s.exec(
@@ -283,6 +299,7 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
         prompted = checkin.prompt_at is not None
         for branch in {b for t in day for b in tr["D"][t]}:
             w = state.checkin_weight(prompted, max(len(day[t].get(branch, [])) for t in day))
+            entry_weights[branch] = w
             for t in day:
                 if branch not in tr["D"][t]:
                     continue
@@ -335,6 +352,9 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
                          reason="crisis flag" if result.crisis else f"S={S_val} ({driver})"))
     patient.risk_level = level
     s.add(patient)
+    if score is not None and S_val is not None:
+        score.level = level
+        s.add(score)
 
     intervention = _todays_intervention(s, patient_id, now.date(), top_now)
     earned = [{"reason": r.reason, "label": rewards.LABELS.get(r.reason, r.reason), "amount": r.amount}
@@ -345,6 +365,14 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
         earned.extend(appie.on_wearable(s, patient_id, now, values))
     s.flush()
     why = explanation.latest_explanation(s, patient_id) if S_val is not None else None
+    final_score = s.exec(select(StateScore).where(
+        StateScore.patient_id == patient_id, StateScore.date <= now.date())
+        .order_by(col(StateScore.date).desc())).first()
+    analysis = clinical.capture_analysis(s, checkin, result.features, active, tr, before,
+                                         clinical.score_point(final_score), entry_weights,
+                                         phrase=result.phrase_check, prompt=prompt_out)
+    checkin.analysis_json = json.dumps(analysis, allow_nan=False)
+    s.add(checkin)
 
     response = CheckInResponse(
         checkin_id=checkin.id,
@@ -361,6 +389,7 @@ def _record_checkin(s: Session, patient: Patient, slot: Slot, result: PipelineRe
         prompt=prompt_out,
         phrase=result.phrase_check,
         rewards=earned,
+        analysis=analysis,
     )
     if request_key is not None:
         checkin.response_json = response.model_dump_json()

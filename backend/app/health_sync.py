@@ -4,6 +4,7 @@ OAuth tokens stay in ignored local data files, never API responses. The demo pat
 explicit and does not pretend to be a connected watch. No historical state is rewritten.
 """
 
+import json
 import logging
 import secrets
 import threading
@@ -126,6 +127,8 @@ def ingest(s: Session, pid: int, days: dict[date, dict], source: str) -> dict:
         if not result.features:
             skipped += 1
             continue
+        result.llm_json = json.dumps({"wearable": {"source": source,
+            "measurement_date": day.isoformat(), "received_at": _iso(now)}})
         minutes = values.get("minute_steps")
         extra = ({"active_minutes": values["active_minutes"]} if values.get("active_minutes") is not None else
                  {"active_minutes": sum(m >= 100 for m in minutes)} if minutes else {})
@@ -134,7 +137,8 @@ def ingest(s: Session, pid: int, days: dict[date, dict], source: str) -> dict:
         s.flush()
         # Observe a complete measurement day now. Never freeze today's partial steps,
         # backdate an EWMA observation, or append a week of old days as today's signal.
-        out = _record_checkin(s, patient, Slot.morning, result, extra, recorded_at=now)
+        out = _record_checkin(s, patient, Slot.morning, result, extra, recorded_at=now,
+                             data_origin="synthetic" if source == "demo" else "live")
         rewards.extend(out.rewards)
         existing.add(day)
         count += 1

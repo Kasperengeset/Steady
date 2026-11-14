@@ -6,13 +6,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import appie, baseline, health_sync
+from . import appie, baseline, clinical_demo, health_sync
 from . import push as push_mod
 from .config import settings
 from .db import engine, init_db
 from .routers import baselines, checkins, friends, interventions, patients, prompts, push, sim
 from .routers import companion, rewards, social
-from .routers import appie as appie_router, health as health_router, views
+from .routers import appie as appie_router, clinical, health as health_router, views
 from .seed import seed
 
 
@@ -69,11 +69,11 @@ for r in (checkins.router, interventions.router, patients.router, baselines.rout
     app.include_router(r, prefix="/api")
 for r in (rewards.router, social.router, companion.router):  # engagement: #24, #26, #25
     app.include_router(r, prefix="/api")
-for r in (appie_router.router, health_router.router, views.router):
+for r in (appie_router.router, health_router.router, views.router, clinical.router, clinical_demo.router):
     app.include_router(r, prefix="/api")
 
 
 @app.get("/api/health")
 def health() -> dict:
     return {"ok": True, "service": "steady", "api_version": "appie-integration-v1",
-            "capabilities": ["appie", "health-sync", "prompts", "push", "social-consent"]}
+            "capabilities": ["appie", "health-sync", "prompts", "push", "social-consent", "clinical-evidence"]}

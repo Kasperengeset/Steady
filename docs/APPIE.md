@@ -9,7 +9,7 @@ The patient app keeps Mahdan's sage, sand and cream design and generated Appie a
 3. Open Habits. Complete a custom hobby, check the week, or change reminder timezone, quiet hours, pause and on/off preferences.
 4. Open Appie. Give him a nickname and feed him. Food is spent; lifetime earned XP and unlocked looks remain. Headphones and a backpack unlock as XP grows.
 5. Open Circle. Choose separate social consent and the individual details to share. Create a circle or join by code, send a preset reaction, and inspect the held support card and cancellation where applicable. A friend can join through `/join` without the health features.
-6. Open the clinician portal. Check notifications, the patient list, elevated markers and the exact score explanation. Pages refresh when focus returns.
+6. Open the clinician portal. Inspect the cohort, patient trends, every logged entry, baseline measurements and model evidence. The entry inspector shows actual outputs and saved scoring decisions. Pages refresh every five seconds while visible and on return to the tab. Use **Demo workspace** to test real inference against a labelled synthetic reference; see [the clinician walkthrough](CLINICIAN.md).
 
 ## Shared rules
 

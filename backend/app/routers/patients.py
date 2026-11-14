@@ -43,7 +43,7 @@ def get_patient(pid: int, s: Session = Depends(get_session)) -> PatientDetail:
     return PatientDetail(
         patient=p.model_dump(mode="json"),
         scores=[x.model_dump(mode="json") for x in scores],
-        checkins=[c.model_dump(mode="json", exclude={"llm_json", "request_key", "response_json"}) for c in checkins],
+        checkins=[c.model_dump(mode="json", exclude={"llm_json", "request_key", "response_json", "analysis_json"}) for c in checkins],
         top_features=json.loads(scores[-1].top_features_json) if scores else [],
         explanation=explanation.latest_explanation(s, pid),
     )

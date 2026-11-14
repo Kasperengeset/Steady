@@ -58,3 +58,4 @@ def _required_columns() -> None:
                 if name not in existing:
                     conn.exec_driver_sql(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {ddl}')
         conn.exec_driver_sql('CREATE UNIQUE INDEX IF NOT EXISTS uq_appie_checkin_request ON "checkin" (patient_id, request_key)')
+        conn.exec_driver_sql('CREATE UNIQUE INDEX IF NOT EXISTS ix_patient_demo_key ON "patient" (demo_key)')

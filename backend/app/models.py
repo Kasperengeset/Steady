@@ -35,6 +35,7 @@ class Patient(SQLModel, table=True):
     name: str
     created_at: datetime = Field(default_factory=now)
     risk_level: int = 0  # current escalation level 0/1/2, 3 = crisis
+    demo_key: str | None = Field(default=None, index=True, unique=True)
 
 
 class Contact(SQLModel, table=True):
@@ -59,6 +60,8 @@ class CheckIn(SQLModel, table=True):
     speech_s: float | None = None  # seconds with voice energy in the memo (None for written diaries)
     request_key: str | None = None
     response_json: str | None = None  # replay the original response after a network retry
+    analysis_json: str | None = None  # immutable measurements and decisions captured at ingestion
+    data_origin: str | None = None  # live | synthetic; legacy unmarked rows remain unknown
 
 
 class Feature(SQLModel, table=True):

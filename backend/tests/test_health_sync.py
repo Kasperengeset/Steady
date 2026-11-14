@@ -1,5 +1,6 @@
 """Wearable rewards, safe OAuth state handling, and repeat-sync protection."""
 
+import json
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urlparse
 
@@ -48,7 +49,10 @@ def test_demo_health_has_honest_source_and_cannot_duplicate_food_or_scores(clien
     two = client.post("/api/patients/1/health/demo").json()
     assert two["days_synced"] == 0 and two["skipped"] == 1 and two["rewards"] == []
     with Session(db.engine) as s:
-        assert len(s.exec(select(CheckIn)).all()) == 1
+        rows = s.exec(select(CheckIn)).all()
+        assert len(rows) == 1
+        assert rows[0].data_origin == "synthetic"
+        assert json.loads(rows[0].llm_json)["wearable"]["measurement_date"] == "2026-11-13"
         assert len(s.exec(select(RewardLedger)).all()) == 3
         assert rewards.balance(s, 1) == 15
     companion = client.get("/api/patients/1/appie").json()

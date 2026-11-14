@@ -25,6 +25,8 @@ Raw audio is deleted right after feature extraction. Full plan: [`docs/plan.md`]
 
 The combined patient app keeps the sage-and-sand design and Appie artwork, with the shared backend's phrase checks, local reminders, push, social consent, rewards and scoring. See [Appie integration and testing](docs/APPIE.md). On Windows, `scripts/run_local.ps1` starts the frontend and backend together from the same checkout.
 
+The [clinical workspace walkthrough](docs/CLINICIAN.md) covers the desktop at `/clinician`: cohort triage, longitudinal state, raw model measurements, exact saved entry analysis, personal baselines and held-out model evidence. **Demo workspace** adds a separate synthetic history without resetting patients. Newly submitted diaries and recordings run through the actual pipelines and remain labelled live.
+
 ```bash
 # backend (Python 3.13)
 cd backend

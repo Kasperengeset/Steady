@@ -71,6 +71,7 @@ class CheckInResponse(BaseModel):
     prompt: PromptAnswerOut | None = None  # this check-in answered today's daily prompt (#22)
     phrase: dict | None = None  # reading check of the fixed phrase, if one was uploaded (#21)
     rewards: list[dict] = Field(default_factory=list)
+    analysis: dict | None = None
 
 
 class TextCheckInIn(BaseModel):
