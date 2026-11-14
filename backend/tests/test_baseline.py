@@ -1,12 +1,15 @@
 """Healthy-baseline lifecycle and scoring (STATUS.md T1). Audio analysis is replaced by controlled
 feature values, so these tests check the engine, not the signal processing."""
 
+import json
 import random
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlmodel import SQLModel
 
+from app import baseline as baseline_mod
 from app import db
 from app.engine import state
 from app.main import app
@@ -17,6 +20,16 @@ from app.seed import seed
 
 STATS = state.load_branch("acoustic").meta["feature_stats"]
 SOURCE = {"arousal": FeatureSource.emotion, "valence": FeatureSource.emotion}
+
+
+def text_features(bad: bool, rng: random.Random) -> PipelineResult:
+    """Mocked written diary (text branch) – Mahdan's real model is tested in test_text.py."""
+    res = PipelineResult(transcript="(mock diary)")
+    vals = {"text_logit": 4.0, "absolutist": 3.0, "first_person": 10.0, "sentiment": -0.8} if bad else {
+        "text_logit": rng.gauss(-2, 0.5), "absolutist": abs(rng.gauss(0.5, 0.3)),
+        "first_person": rng.gauss(5, 1), "sentiment": rng.gauss(0.5, 0.2)}
+    res.features = [(f, v, FeatureSource.text) for f, v in vals.items()]
+    return res
 
 
 def features(depression: float, rng: random.Random) -> PipelineResult:
@@ -35,14 +48,26 @@ def client(monkeypatch):
     seed()
     queue: list[PipelineResult] = []
     monkeypatch.setattr(checkins_router, "extract_features", lambda path: queue.pop(0))
+    monkeypatch.setattr(checkins_router, "extract_text_features", lambda text: queue.pop(0))
     c = TestClient(app)
     c.queue = queue
+    # Controllable clock: each check-in is a new day unless same_day=True
+    c.day = 0
+    start = datetime.now(timezone.utc) + timedelta(minutes=1)
+    monkeypatch.setattr(baseline_mod, "clock", lambda: start + timedelta(days=c.day, seconds=c.tick))
+    c.tick = 0
     return c
 
 
-def checkin(c, res: PipelineResult, slot="morning") -> dict:
+def checkin(c, res: PipelineResult, slot="morning", same_day=False, kind="audio") -> dict:
+    if not same_day and c.tick:
+        c.day += 1
+    c.tick += 1
     c.queue.append(res)
-    r = c.post("/api/checkins", data={"patient_id": 1, "slot": slot}, files={"audio": ("a.wav", b"x", "audio/wav")})
+    if kind == "text":
+        r = c.post("/api/checkins/text", json={"patient_id": 1, "slot": slot, "text": "x"})
+    else:
+        r = c.post("/api/checkins", data={"patient_id": 1, "slot": slot}, files={"audio": ("a.wav", b"x", "audio/wav")})
     assert r.status_code == 200, r.text
     return r.json()
 
@@ -85,13 +110,14 @@ def test_locks_after_period_then_scores_and_catches_change(client):
     assert out["state"]["S_rolling"] is None  # needs rolling_min_n same-slot check-ins first
 
     healthy_S = out["state"]["S_anchored"]
-    out = checkin(client, features(1.0, rng))  # a full control→patient shift
-    # Detectability on Androids is ~1.6 SD for a full shift (ml/reports/acoustic/summary.md)
-    assert out["state"]["S_anchored"] > 1.2
-    assert out["state"]["S_anchored"] - healthy_S > 1.0
-    assert out["state"]["driver"] == "anchored"
+    for _ in range(4):  # four days of a full control→patient shift
+        out = checkin(client, features(1.0, rng))
+    # ~1.5 SD per day for a full shift (ml/reports/acoustic/summary.md); the EWMA needs a few days
+    assert out["state"]["S_anchored"] > 1.0
+    assert out["state"]["S_anchored"] - healthy_S > 0.8
 
-    out = checkin(client, features(2.0, rng))  # far beyond the corpus difference → S > 2 → clinician
+    for _ in range(4):  # far beyond the corpus difference → S > 2 → clinician
+        out = checkin(client, features(2.5, rng))
     assert out["state"]["S_anchored"] > 2
     assert out["state"]["level"] >= 2
 
@@ -124,3 +150,80 @@ def test_clinician_reject_starts_over_and_confirm_is_recorded(client):
     assert d["active"] is None and d["building"]["version"] == 2
     out = checkin(client, features(0, rng))
     assert out["state"]["S"] is None  # no active baseline → no score until the new one locks
+
+
+# ---------------------------------------------------------------- day combination and baseline edge cases (B16, B17)
+
+def _lock_mixed_baseline(client, rng, days=6):
+    """A spoken and a written check-in every day; locks at the 6th check-in."""
+    client.post("/api/patients/1/baseline/start", json={"period_days": 0, "min_checkins": 2 * days})
+    for _ in range(days):
+        checkin(client, features(0, rng))
+        out = checkin(client, text_features(False, rng), same_day=True, kind="text")
+    assert out["baseline"]["status"] == "active"
+
+
+def test_same_day_checkins_are_combined_not_overwritten(client):
+    rng = random.Random(4)
+    _lock_mixed_baseline(client, rng)
+    bad = checkin(client, text_features(True, rng), kind="text")  # new day: a very negative diary
+    D_text = bad["state"]["branches"]["text"]
+    assert D_text > 3
+    later = checkin(client, features(0, rng), same_day=True)  # neutral spoken check-in, same day
+    assert later["state"]["branches"]["text"] == pytest.approx(D_text)  # the diary still counts
+    assert "acoustic" in later["state"]["branches"]
+    assert later["state"]["S"] > 1  # not replaced by the neutral voice-only value
+
+
+def test_same_branch_twice_a_day_is_combined_stouffer(client):
+    rng = random.Random(5)
+    client.post("/api/patients/1/baseline/start", json={"period_days": 0, "min_checkins": 6})
+    for _ in range(6):
+        checkin(client, features(0, rng))
+    a = checkin(client, features(0.8, rng))["state"]["branches"]["acoustic"]  # new day, morning
+    first = state.combine_checkins([a])
+    out = checkin(client, features(0.8, rng), slot="evening", same_day=True)
+    day = json.loads(client.get("/api/patients/1").json()["scores"][-1]["branch_scores_json"])
+    d1, d2 = day["anchored"]["acoustic"]
+    assert first == pytest.approx(d1, abs=1e-4)
+    assert out["state"]["branches"]["acoustic"] == pytest.approx((d1 + d2) / 2**0.5, abs=1e-3)
+
+
+def test_feature_with_too_few_baseline_values_gets_no_stats(client):
+    rng = random.Random(6)
+    client.post("/api/patients/1/baseline/start", json={"period_days": 0, "min_checkins": 6})
+    checkin(client, text_features(False, rng), kind="text")  # only ONE written entry in the baseline
+    for _ in range(5):
+        out = checkin(client, features(0, rng))
+    assert out["baseline"]["status"] == "active"
+    stats = client.get("/api/patients/1/baseline").json()["stats"]["all"]
+    assert "speech_rate" in stats and "text_logit" not in stats
+    out = checkin(client, text_features(True, rng), kind="text")
+    assert out["state"]["S"] is None and "text" not in out["state"]["branches"]  # no guessed scale
+
+
+def test_rebaseline_shows_building_progress_and_freezes_old_count(client):
+    rng = random.Random(7)
+    client.post("/api/patients/1/baseline/start", json={"period_days": 0, "min_checkins": 3})
+    for _ in range(5):  # locks at the 3rd, two more afterwards
+        out = checkin(client, features(0, rng))
+    assert sum(out["baseline"]["checkins"].values()) == 3  # baseline period only, frozen at lock
+    assert out["baseline_building"] is None
+    client.post("/api/patients/1/baseline/start", json={"period_days": 14, "min_checkins": 3, "note": "new phone"})
+    out = checkin(client, features(0, rng))
+    assert out["baseline"]["status"] == "active" and out["baseline"]["version"] == 1
+    assert out["baseline_building"]["status"] == "building" and out["baseline_building"]["version"] == 2
+
+
+def test_mixed_baseline_without_enough_values_per_feature_keeps_building(client):
+    rng = random.Random(8)
+    client.post("/api/patients/1/baseline/start", json={"period_days": 0, "min_checkins": 6})
+    for _ in range(3):  # 6 check-ins in total, but only 3 values per feature (< min_feature_n = 5)
+        checkin(client, features(0, rng))
+        out = checkin(client, text_features(False, rng), same_day=True, kind="text")
+    assert out["baseline"]["status"] == "building"  # not locked into a baseline that cannot score
+    for _ in range(2):  # two more spoken days → acoustic features reach 5 → locks
+        out = checkin(client, features(0, rng))
+    assert out["baseline"]["status"] == "active"
+    stats = client.get("/api/patients/1/baseline").json()["stats"]["all"]
+    assert "speech_rate" in stats and "text_logit" not in stats

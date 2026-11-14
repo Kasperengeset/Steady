@@ -20,8 +20,8 @@
 Per check-in:
 1. Extract features per branch.
 2. **z-scores against the patient's own baselines** – two tracks (see §3 «Healthy baseline»): `z = direction × (today − centre) / scale`.
-3. Branch score: `D_branch = Σ w·z / √(wᵀ R w)`, where R is the within-person correlation measured on the corpus → D has SD 1 when nothing changes (B10, B12).
-4. Daily score `D_t` = mean over branches with data today.
+3. Branch score per check-in: `D_branch = Σ w·z / √(wᵀ R w)`, where R is the within-person correlation measured on the corpus → D has SD 1 when nothing changes (B10, B12).
+4. **All check-ins of a day count** (B16): per branch the day's check-ins are combined as `Σ D / √n` (still SD 1, signal grows with √n); daily score `D_t` = mean over branches with data today. A later check-in no longer overwrites an earlier one.
 5. Smoothing: `S_t = 0.3·D_t + 0.7·S_(t−1)`, per track; **S = max(S_anchored, S_rolling)**.
 6. Escalation: friends at S > 1 for 3 days · clinician at S > 2 · immediately on the crisis flag.
 7. Interventions are chosen with Thompson sampling (bandit) and learn from evening feedback.
@@ -159,7 +159,9 @@ The app compares the patient with themselves. **If someone is already depressed 
 **Lifecycle:** `building` → (period over and enough check-ins) → `active` → (a newer one locks) → `retired`. The clinician can reject: `rejected`, and a new one starts.
 - **Start:** the first check-in without a baseline starts one automatically. The clinician can start a new one with `POST /api/patients/{id}/baseline/start` (e.g. after a new phone or confirmed remission).
 - **Period:** 14 days and at least 10 check-ins (`config.py`: `healthy_period_days`, `healthy_min_checkins`). Overridable per baseline; **demo: `{"period_days": 0, "min_checkins": 3}`**. If the period ends with too few check-ins, it is extended.
+- **Minimum values per feature (B17, B18):** a feature only gets baseline stats with ≥ `min(min_checkins, min_feature_n = 5)` values. Text features have no corpus SD to shrink toward, so 1–2 written entries would give a guessed scale. A branch without stats gets no anchored score (rolling track and crisis flag still work). **A baseline only locks if at least one feature qualifies** – otherwise the period is extended (e.g. 3 spoken + 3 written check-ins). Mixed use needs ≥ 5 of each kind for both branches to be scored.
 - **No score during the period.** The patient sees "Building your normal: day x of 14". The crisis flag works throughout.
+- **Re-baselining:** while a new baseline builds, the response has `baseline` (the active one, still scoring) and `baseline_building` (progress of the new one); the patient sees "Updating your normal". An active baseline's check-in count is frozen at lock.
 - **Stored per feature and per slot** (`morning` / `evening` / `all`):
   - centre = median
   - scale = MAD-based SD shrunk toward the corpus within-person SD: `σ² = (n·s² + k·s₀²)/(n + k)`, k = 5
@@ -174,34 +176,40 @@ The app compares the patient with themselves. **If someone is already depressed 
   - `engine/state.py` (`robust_stats`, `history_stats`, `zscores`, `branch_deviation`)
   - `routers/checkins.py` (two tracks)
   - `routers/baselines.py` (API: `GET …/baseline`, `POST …/baseline/start|confirm|reject`)
-  - tests in `backend/tests/test_baseline.py` (`backend/.venv/bin/python -m pytest backend/tests`)
+  - tests in `backend/tests/test_baseline.py` (`backend/.venv/bin/python -m pytest backend/tests`); one shared clock `baseline.clock()` that tests replace to advance days
 - ⚠️ **After data-model changes, delete `data/app.db`** (`create_all` does not add new columns). It only holds test data.
 
 ### Simulator (`backend/app/sim/simulator.py`)
-Runs the **real engine** (same functions as the app, trained `acoustic.json`) on a synthetic patient for 70 days, one spoken check-in per day.
+Runs the **real engine** (same functions as the app, trained `acoustic.json`) on a synthetic patient for 70 days, with 1 or 2 spoken check-ins per day (`checkins_per_day`). Fully reproducible per seed (the bandit uses the seeded RNG too).
 - Latent depression `d_t` in [0, 1] follows an AR(1) process. A slow relapse starts on day 40 and builds over ~15 days.
 - Features = personal offset + `d_t` × (patient mean − control mean from the corpus) + noise. Noise uses the **measured** within-person SD and correlation from Androids, × `day_noise_factor`.
 - The bandit picks interventions; each has a hidden "true" helpfulness.
 - API: `POST /api/sim/run` gives one patient. `GET /api/sim/robustness?seeds=50` gives numbers over many patients – **use those externally, not one lucky seed.**
 
-**Results over 50 synthetic patients** ("combined" = what the app escalates on):
+**Results over 100 synthetic patients** (14 Nov, reproducible; "combined" = what the app escalates on):
 
-| Day-to-day noise | Missed, rolling | Missed, anchored | **Missed, combined (app)** | False alarms, combined (mean days) |
-|---|---|---|---|---|
-| ×1.0 (measured within one session) | 41/50 | 15/50 | **14/50** | 0.38 |
-| ×1.5 | 41/50 | 26/50 | **25/50** | 0.68 |
-| ×2.0 | 40/50 | 30/50 | **28/50** | 0.74 |
+| Day-to-day noise | Check-ins/day | Missed, rolling | Missed, anchored | **Missed, combined (app)** | False alarms, combined (mean days before relapse) |
+|---|---|---|---|---|---|
+| ×1.0 (measured within one session) | 1 | 78 | 24 | **24 / 100** | 0.33 |
+| ×1.0 | **2** | 62 | 7 | **6 / 100** | 0.55 |
+| ×1.5 | 1 | 75 | 46 | **40 / 100** | 0.56 |
+| ×1.5 | **2** | 73 | 20 | **18 / 100** | 0.75 |
+| ×2.0 | 1 | 72 | 56 | **46 / 100** | 0.67 |
+| ×2.0 | **2** | 81 | 39 | **32 / 100** | 0.78 |
+
+- **Morning + evening (T16) roughly halves the missed relapses**, at the cost of slightly more false alarms.
+- Earlier 50-patient numbers (14/50, 25/50, 28/50) varied by a few relapses between runs because the bandit used an unseeded RNG; these are reproducible.
 
 ⚠️ **Earlier numbers (0/50 missed) were too optimistic:** they used a guessed noise level (0.6 × between-person SD) and assumed independent features.
 
 Interpretation:
 - **The fixed baseline is essential.** The rolling one "absorbs" a slow relapse (boiling frog): ~41/50 missed on its own.
-- **Voice alone catches only about half of relapses** at realistic noise (×1.5–2). A full relapse moves D only ~1.5 SD and the alarm needs S > 1 for 3 days. Needed:
-  - several measurements per day (morning + evening; averaging gives noise / √2) – T16
+- **One spoken check-in a day catches only about half of relapses** at realistic noise (×1.5–2). A full relapse moves D only ~1.5 SD and the alarm needs S > 1 for 3 days. What helps:
+  - **two check-ins a day** (done, B16): 40 → 18 missed of 100 at ×1.5
   - calibrated thresholds – T12
   - the text and health branches
 - **We do not detect relapse earlier than self-report** (median ~0 days). Do not claim early warning in the pitch.
-- **The bandit learns weakly in 70 days** (19/50 found the best intervention with older settings). Reward is capped at 0.5 because "did the state improve?" is not wired in (T8).
+- **The bandit learns moderately in 70 days**: it ends on the truly best intervention in 45/100 patients (chance ≈ 17/100). Reward is capped at 0.5 because "did the state improve?" is not wired in (T8).
 - **Assumptions** (returned by the API): measured within-session noise × `day_noise_factor`, measured correlation, self-report lagging 4 days.
 
 ### What gives an absolute level rather than just change?
@@ -294,7 +302,7 @@ A good healthy baseline is **necessary but not sufficient**.
    - loudness relative to background noise
 4. ~~**T10** more robust baseline~~ ✅ median/MAD, morning and evening separately, ≥ 7 for the rolling track.
 5. ~~**T15** correlation between features~~ ✅ D normalised with the measured within-person correlation (B12). Noise in D had been underestimated by 27 %.
-6. **T16** use morning + evening check-ins together.
+6. ~~**T16** morning + evening together~~ ✅ all check-ins of a day are combined per branch (B16). Simulator: 40 → 18 missed of 100 at ×1.5.
 7. **T12** calibrate thresholds in the simulator against an acceptable number of false alarms per patient-month.
 8. **T3/T4** text and health branches: independent sources are the biggest real gain.
 9. Higher AUC (more eGeMAPS features, gender normalisation, reading + interview tasks together). Least important for the product.
@@ -321,6 +329,9 @@ A good healthy baseline is **necessary but not sufficient**.
 | B13 | Weights are **not** chosen from our own test recordings | 2 people are a test, not training data. Tuning to them looks good but is overfitting |
 | B14 | Healthy baseline: locks automatically after 14 days (clinician can reject), S = max(anchored, rolling), never re-anchored automatically | Locking without a clinician keeps the app from stalling. "Max of two" catches both drift and abrupt drops (simulator: 14/50 missed vs 15/50 anchored only). Automatic re-anchoring would bring back the boiling frog |
 | B15 | Baseline scale = MAD shrunk toward the corpus within-person SD (k = 5) | 14–28 measurements give an uncertain personal SD, and one odd day must not ruin the baseline |
+| B16 | All check-ins of a day are combined per branch as `Σ D / √n` (Stouffer), then averaged over branches | The day score was overwritten by the last check-in (a negative diary was erased by a neutral spoken check-in later the same day). `Σ D / √n` keeps SD 1 so thresholds keep their meaning, while a real shift grows with √n: two check-ins a day halve the missed relapses in the simulator. Assumes independent noise between check-ins |
+| B17 | A feature needs ≥ `min(min_checkins, 5)` baseline values to get stats | Text features have no corpus SD to shrink toward; 1–2 written entries would give a guessed scale (fallback 1.0) |
+| B18 | A baseline only locks if at least one feature has enough values; otherwise the period is extended | Without this, a mixed baseline (3 spoken + 3 written) locked with no stats → an active baseline that could never score and is never re-anchored automatically |
 
 ---
 
@@ -345,7 +356,9 @@ A good healthy baseline is **necessary but not sufficient**.
 - [x] **T13** Change weights tested on held-out data: none beats equal weights, so equal weights are used (B12). The simulator uses measured noise and correlation
 - [ ] **T14** Recording protocol and quality check: little speech, clipping, SNR; loudness relative to background noise
 - [x] **T15** D normalised with the measured within-person correlation (`state.branch_deviation`)
-- [ ] **T16** Use two check-ins per day (morning + evening) together in the score: halves the noise variance. Measure the gain in the simulator
+- [x] **T16** All check-ins of a day combined per branch (B16); simulator: 2 check-ins/day roughly halve missed relapses
+- [x] Flow fixes after the main merge: day score no longer overwritten (B16), minimum values per feature (B17), lock only with stats (B18), correct re-baselining progress (`baseline_building`)
+- [ ] **T17** A branch with too few baseline values stays unscored until a new baseline. Consider letting a branch "join" an active baseline later once it has ≥ 5 values (only if the clinician confirms the patient is still well)
 - [ ] **T12** Calibrate escalation thresholds: trade-off between detection speed and false alarms, over many simulator seeds
 
 ---
