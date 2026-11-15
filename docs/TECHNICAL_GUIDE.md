@@ -170,9 +170,9 @@ All API paths below are under `/api`; see `/docs` for schemas.
 | Clinical evidence | `GET /clinician/overview`, `/clinician/patients/{id}/workspace`, `/clinician/patients/{id}/entries`, `/clinician/entries/{id}`; desktop `/clinician`. |
 | Demo history | `POST /clinician/demo` with `drift`, `stable` or `building`. |
 | Reference management | `/patients/{id}/baseline` and its `start`, `confirm`, `reject` actions. |
-| Companion and habits | `/patients/{id}/appie`, `/appie/feed`, `/appie/habits`; patient `/appie` and `/habits`. |
+| Companion and habits | `/patients/{id}/appie`, `/patients/{id}/appie/feed`, `/patients/{id}/appie/habits`; patient `/appie` and `/habits`. |
 | Suggested-action feedback | `POST /interventions/feedback`; patient `/followup`. |
-| Health connection | `/patients/{id}/health`, `/health/connect`, `/health/sync`, `/health/demo`, `/health/connection`; OAuth `/google-health/callback`. |
+| Health connection | `/patients/{id}/health` plus `/patients/{id}/health/connect`, `/patients/{id}/health/sync`, `/patients/{id}/health/demo`, `/patients/{id}/health/connection`; OAuth `/google-health/callback`. |
 | Social and prompts | Contracts in [social.py](../backend/app/routers/social.py), [prompts.py](../backend/app/routers/prompts.py) and [push.py](../backend/app/routers/push.py); patient `/circle`, friend `/join`. |
 
 The React route definitions are in [App.tsx](../frontend/src/App.tsx). Typed client calls live in [frontend/src/lib](../frontend/src/lib). The API health endpoint reports capabilities so an older backend paired with a newer frontend is easier to diagnose.
