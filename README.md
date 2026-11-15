@@ -52,8 +52,8 @@ Training datasets are **not required to run the demo**. The text classifier and 
 On a fresh clone:
 
 ```powershell
-git clone https://github.com/Kasperengeset/Junction-2026-AltoUni.git
-cd Junction-2026-AltoUni
+git clone https://github.com/Kasperengeset/Steady.git
+cd Steady
 py -3.13 -m venv backend/.venv
 .\backend\.venv\Scripts\python.exe -m pip install -r backend/requirements-ml.txt tzdata
 Copy-Item .env.example .env
